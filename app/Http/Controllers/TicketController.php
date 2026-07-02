@@ -1960,7 +1960,7 @@ class TicketController extends Controller
                 // tag yang dihapus). Override ticket.cc_emails dengan list ini agar reply
                 // berikutnya auto-populate dari state terbaru. Simpan dalam format
                 // [{address,name}] agar konsisten dengan EcoSystem (processInbox & helpdesk reply).
-                $senderSelf  = strtolower((string) (env('MS_SENDER_EMAIL') ?? config('services.microsoft_graph.sender_email', '')));
+                $senderSelf  = strtolower((string) config('services.microsoft_graph.sender_email', ''));
                 $customerSelf = strtolower((string) ($senderEmail ?? ''));
 
                 if ($request->filled('cc_emails') || is_array($rawCc)) {
@@ -3592,7 +3592,7 @@ class TicketController extends Controller
     private function graphApiGet(string $path, array $query = [], array $headers = []): array
     {
         $token   = $this->graphGetToken();
-        $baseUrl = rtrim(env('GRAPH_BASE_URL', 'https://graph.microsoft.com/v1.0'), '/');
+        $baseUrl = rtrim(config('services.microsoft_graph.base_url', 'https://graph.microsoft.com/v1.0'), '/');
         $http    = Http::withToken($token);
         if (!empty($headers)) {
             $http = $http->withHeaders($headers);
@@ -3622,7 +3622,7 @@ class TicketController extends Controller
         if ($hasBody && !$attNeedsFetch) return;
 
         try {
-            $sender     = env('MS_SENDER_EMAIL');
+            $sender     = config('services.microsoft_graph.sender_email');
             $graphMsg   = null;
             // Minta body dalam HTML supaya inline image tetap jadi <img src="cid:..."> tag,
             // bukan placeholder text `[image.png]` yang tidak bisa di-rewrite via regex.
@@ -3791,13 +3791,13 @@ class TicketController extends Controller
 
     private function graphGetToken(): string
     {
-        $tenantId = env('MS_TENANT_ID');
+        $tenantId = config('services.microsoft_graph.tenant_id');
         $response = Http::asForm()->post(
             "https://login.microsoftonline.com/{$tenantId}/oauth2/v2.0/token",
             [
                 'grant_type'    => 'client_credentials',
-                'client_id'     => env('MS_CLIENT_ID'),
-                'client_secret' => env('MS_CLIENT_SECRET'),
+                'client_id'     => config('services.microsoft_graph.client_id'),
+                'client_secret' => config('services.microsoft_graph.client_secret'),
                 'scope'         => 'https://graph.microsoft.com/.default',
             ]
         );
@@ -3809,8 +3809,8 @@ class TicketController extends Controller
 
     private function graphFetchAttachment(string $graphMsgId, string $attachmentId): array
     {
-        $sender  = env('MS_SENDER_EMAIL');
-        $baseUrl = rtrim(env('GRAPH_BASE_URL', 'https://graph.microsoft.com/v1.0'), '/');
+        $sender  = config('services.microsoft_graph.sender_email');
+        $baseUrl = rtrim(config('services.microsoft_graph.base_url', 'https://graph.microsoft.com/v1.0'), '/');
         $token   = $this->graphGetToken();
 
         $response = Http::withToken($token)->get(

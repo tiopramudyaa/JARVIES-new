@@ -91,4 +91,25 @@ return [
         'tenant'        => env('AZURE_TENANT_ID', 'common'),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Microsoft Graph (helpdesk mailbox)
+    |--------------------------------------------------------------------------
+    |
+    | MUST be read via config(), not env(), from application code — env()
+    | returns null once `php artisan config:cache` has run in production,
+    | which would silently break all Graph email sending (password setup,
+    | reset, ticket relay). Same convention as EcoSystem.
+    |
+    */
+
+    'microsoft_graph' => [
+        'tenant_id'     => env('MS_TENANT_ID'),
+        'client_id'     => env('MS_CLIENT_ID'),
+        'client_secret' => env('MS_CLIENT_SECRET'),
+        'sender_email'  => env('MS_SENDER_EMAIL'),
+        'sender_name'   => env('MS_SENDER_NAME'),
+        'base_url'      => env('GRAPH_BASE_URL', 'https://graph.microsoft.com/v1.0'),
+    ],
+
 ];

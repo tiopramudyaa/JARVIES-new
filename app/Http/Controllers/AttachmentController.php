@@ -59,10 +59,10 @@ class AttachmentController extends Controller
      */
     private function fetchFromGraph(TicketAttachment $attachment)
     {
-        $tenantId     = env('MS_TENANT_ID');
-        $clientId     = env('MS_CLIENT_ID');
-        $clientSecret = env('MS_CLIENT_SECRET');
-        $sender       = env('MS_SENDER_EMAIL');
+        $tenantId     = config('services.microsoft_graph.tenant_id');
+        $clientId     = config('services.microsoft_graph.client_id');
+        $clientSecret = config('services.microsoft_graph.client_secret');
+        $sender       = config('services.microsoft_graph.sender_email');
 
         if (!$tenantId || !$clientId || !$clientSecret || !$sender) {
             Log::error('AttachmentController: MS credentials not configured');
@@ -88,7 +88,7 @@ class AttachmentController extends Controller
         }
 
         $accessToken = $tokenRes->json('access_token');
-        $baseUrl     = rtrim(env('GRAPH_BASE_URL', 'https://graph.microsoft.com/v1.0'), '/');
+        $baseUrl     = rtrim(config('services.microsoft_graph.base_url', 'https://graph.microsoft.com/v1.0'), '/');
 
         $res = Http::withToken($accessToken)
             ->get("{$baseUrl}/users/{$sender}/messages/{$attachment->graph_message_id}/attachments/{$attachment->graph_attachment_id}");

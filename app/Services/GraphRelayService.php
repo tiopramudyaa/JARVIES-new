@@ -31,17 +31,17 @@ class GraphRelayService
 
     public function __construct()
     {
-        $this->graphBase = rtrim(env('GRAPH_BASE_URL', 'https://graph.microsoft.com/v1.0'), '/');
-        $this->sender    = env('MS_SENDER_EMAIL', '');
+        $this->graphBase = rtrim(config('services.microsoft_graph.base_url', 'https://graph.microsoft.com/v1.0'), '/');
+        $this->sender    = config('services.microsoft_graph.sender_email', '');
     }
 
     // ─── Auth ─────────────────────────────────────────────────────────────────
 
     private function getAccessToken(): ?string
     {
-        $tenantId     = env('MS_TENANT_ID');
-        $clientId     = env('MS_CLIENT_ID');
-        $clientSecret = env('MS_CLIENT_SECRET');
+        $tenantId     = config('services.microsoft_graph.tenant_id');
+        $clientId     = config('services.microsoft_graph.client_id');
+        $clientSecret = config('services.microsoft_graph.client_secret');
 
         $response = Http::asForm()->post(
             "https://login.microsoftonline.com/{$tenantId}/oauth2/v2.0/token",

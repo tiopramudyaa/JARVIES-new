@@ -21,14 +21,14 @@ class EmailController extends Controller
      */
     private function getAccessToken(): string
     {
-        $tenantId = env('MS_TENANT_ID');
+        $tenantId = config('services.microsoft_graph.tenant_id');
 
         $response = Http::asForm()->post(
             "https://login.microsoftonline.com/{$tenantId}/oauth2/v2.0/token",
             [
                 'grant_type'    => 'client_credentials',
-                'client_id'     => env('MS_CLIENT_ID'),
-                'client_secret' => env('MS_CLIENT_SECRET'),
+                'client_id'     => config('services.microsoft_graph.client_id'),
+                'client_secret' => config('services.microsoft_graph.client_secret'),
                 'scope'         => 'https://graph.microsoft.com/.default',
             ]
         );
@@ -43,7 +43,7 @@ class EmailController extends Controller
     private function graphGet(string $path, array $query = []): array
     {
         $token   = $this->getAccessToken();
-        $baseUrl = rtrim(env('GRAPH_BASE_URL', 'https://graph.microsoft.com/v1.0'), '/');
+        $baseUrl = rtrim(config('services.microsoft_graph.base_url', 'https://graph.microsoft.com/v1.0'), '/');
 
         $response = Http::withToken($token)->get("{$baseUrl}{$path}", $query);
 
@@ -57,7 +57,7 @@ class EmailController extends Controller
     private function graphPost(string $path, array $body): \Illuminate\Http\Client\Response
     {
         $token   = $this->getAccessToken();
-        $baseUrl = rtrim(env('GRAPH_BASE_URL', 'https://graph.microsoft.com/v1.0'), '/');
+        $baseUrl = rtrim(config('services.microsoft_graph.base_url', 'https://graph.microsoft.com/v1.0'), '/');
 
         $response = Http::withToken($token)->post("{$baseUrl}{$path}", $body);
 
@@ -71,7 +71,7 @@ class EmailController extends Controller
     private function graphPatch(string $path, array $body): void
     {
         $token   = $this->getAccessToken();
-        $baseUrl = rtrim(env('GRAPH_BASE_URL', 'https://graph.microsoft.com/v1.0'), '/');
+        $baseUrl = rtrim(config('services.microsoft_graph.base_url', 'https://graph.microsoft.com/v1.0'), '/');
 
         Http::withToken($token)->patch("{$baseUrl}{$path}", $body);
     }
@@ -162,7 +162,7 @@ class EmailController extends Controller
      */
     public function inbox()
     {
-        $email = env('MS_SENDER_EMAIL');
+        $email = config('services.microsoft_graph.sender_email');
 
         $data = $this->graphGet("/users/{$email}/mailFolders/inbox/messages", [
             '$top'     => 20,
@@ -184,7 +184,7 @@ class EmailController extends Controller
             'body'    => ['required', 'string'],
         ]);
 
-        $sender = env('MS_SENDER_EMAIL');
+        $sender = config('services.microsoft_graph.sender_email');
 
         $this->graphPost("/users/{$sender}/sendMail", [
             'message' => [
@@ -214,7 +214,7 @@ class EmailController extends Controller
             'in_reply_to' => ['nullable', 'string'],
         ]);
 
-        $sender  = env('MS_SENDER_EMAIL');
+        $sender  = config('services.microsoft_graph.sender_email');
         $subject = stripos($data['subject'], 're:') !== 0 ? 'Re: ' . $data['subject'] : $data['subject'];
 
         if (!empty($data['in_reply_to'])) {
@@ -261,7 +261,7 @@ class EmailController extends Controller
     public function processInbox(Request $request)
     {
         try {
-            $sender = env('MS_SENDER_EMAIL');
+            $sender = config('services.microsoft_graph.sender_email');
 
             // Ambil email yang belum dibaca
             $data = $this->graphGet("/users/{$sender}/mailFolders/inbox/messages", [
@@ -628,7 +628,7 @@ class EmailController extends Controller
         string $body,
         ?string $inReplyTo = null
     ): void {
-        $sender       = env('MS_SENDER_EMAIL');
+        $sender       = config('services.microsoft_graph.sender_email');
         $replySubject = stripos($subject, 're:') !== 0 ? 'Re: ' . $subject : $subject;
 
         if ($inReplyTo) {
