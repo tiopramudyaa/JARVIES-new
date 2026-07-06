@@ -4369,10 +4369,11 @@ class TicketController extends Controller
         $data        = $this->graphFetchAttachment($graphMsgId, $att['id']);
         $content     = base64_decode($data['contentBytes'] ?? '');
         $contentType = $data['contentType'] ?? $att['contentType'] ?? 'application/octet-stream';
-        $filename    = $data['name'] ?? $att['name'] ?? 'attachment';
+        $filename  = $data['name'] ?? $att['name'] ?? 'attachment';
+        $asciiName = str_replace(['"', '\\', "\r", "\n"], '', preg_replace('/[^\x20-\x7E]/', '_', $filename));
 
         return response($content, 200)
             ->header('Content-Type', $contentType)
-            ->header('Content-Disposition', 'attachment; filename="' . addslashes($filename) . '"');
+            ->header('Content-Disposition', 'attachment; filename="' . $asciiName . '"; filename*=UTF-8\'\'' . rawurlencode($filename));
     }
 }

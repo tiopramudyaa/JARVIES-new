@@ -222,7 +222,26 @@
                         <th class="px-3 py-2.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide whitespace-nowrap border-b border-gray-200" style="min-width:130px;">Type</th>
 
                         <th class="px-3 py-2.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide whitespace-nowrap border-b border-gray-200" style="min-width:100px;">Man Days</th>
-                        <th class="px-3 py-2.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide whitespace-nowrap border-b border-gray-200" style="min-width:130px;">Created By</th>
+                        {{-- Created By: text search panel --}}
+                        <th class="p-0 text-left whitespace-nowrap border-b border-gray-200 bg-gray-50 relative" style="min-width:160px;">
+                            <button type="button" onclick="toggleColPanel('createdBy', event)"
+                                    class="w-full flex items-center gap-1.5 px-3 py-2.5 hover:bg-gray-100 transition-colors">
+                                <span class="text-xs font-semibold text-gray-600 uppercase tracking-wide">Created By</span>
+                                <svg id="createdByCaret" class="w-3 h-3 text-gray-400 transition-transform shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/></svg>
+                                <svg id="createdByFilterIcon" class="w-3 h-3 text-gray-300 transition-colors shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M3 5a1 1 0 011-1h12a1 1 0 011 1v1.586a1 1 0 01-.293.707l-4.121 4.121A1 1 0 0112 12.121V15.5l-4 1.5v-4.879a1 1 0 00-.293-.707L3.586 7.293A1 1 0 013.293 6.586L3 5z" clip-rule="evenodd"/></svg>
+                            </button>
+                            <div id="createdByPanel" class="col-filter-panel hidden fixed bg-white rounded-xl shadow-2xl border border-gray-100 z-[9999] p-3" style="min-width:240px;">
+                                <label class="block text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1">Search created by</label>
+                                <input type="text" id="createdByFilterInput" placeholder="Name or email…"
+                                       class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-red-400"
+                                       oninput="colFilters.createdBy=this.value; applyColFilters();" onclick="event.stopPropagation()">
+                                <p class="text-[10px] text-gray-400 mt-1.5">Matches name or email of the ticket submitter.</p>
+                                <div class="flex justify-end gap-2 mt-3">
+                                    <button type="button" onclick="clearColFilter('createdBy','createdByFilterInput')" class="px-3 py-1.5 text-xs text-gray-600 border border-gray-200 rounded-md hover:bg-gray-50">Clear</button>
+                                    <button type="button" onclick="closeColPanel('createdBy')" class="px-3 py-1.5 text-xs text-white bg-red-700 hover:bg-red-800 rounded-md">Done</button>
+                                </div>
+                            </div>
+                        </th>
                     </tr>
                 </thead>
                 <tbody id="ticketsListBody" class="divide-y divide-gray-100 bg-white"></tbody>
@@ -334,7 +353,7 @@ let itemsPerPage    = 20;
 let totalItems      = 0;
 let totalPages      = 0;
 
-let colFilters  = { ticketNumber: '', description: '', dateFrom: '', dateTo: '' };
+let colFilters  = { ticketNumber: '', description: '', dateFrom: '', dateTo: '', createdBy: '' };
 let sortField   = 'last_update';
 let sortDir     = 'desc';
 let openPanel   = null;
@@ -588,7 +607,7 @@ function filterTickets(status) {
 }
 
 function resetFilters() {
-    colFilters = { ticketNumber: '', description: '', dateFrom: '', dateTo: '' };
+    colFilters = { ticketNumber: '', description: '', dateFrom: '', dateTo: '', createdBy: '' };
     const ticketInput = document.getElementById('ticketFilterInput');
     if (ticketInput) ticketInput.value = '';
     const descInput = document.getElementById('descFilterInput');
@@ -597,6 +616,8 @@ function resetFilters() {
     if (dateFrom)  dateFrom.value = '';
     const dateTo    = document.getElementById('dateFilterTo');
     if (dateTo)    dateTo.value = '';
+    const createdByInput = document.getElementById('createdByFilterInput');
+    if (createdByInput) createdByInput.value = '';
 
     currentFilter = 'all';
     filterTickets('all');
@@ -691,7 +712,7 @@ function closeColPanel(name) {
 }
 
 function closeAllPanels() {
-    ['ticket', 'desc', 'date'].forEach(n => closeColPanel(n));
+    ['ticket', 'desc', 'date', 'createdBy'].forEach(n => closeColPanel(n));
 }
 
 document.addEventListener('click', function() { closeAllPanels(); });
@@ -715,6 +736,14 @@ function applyColFilters() {
     if (colFilters.description) {
         const q = colFilters.description.toLowerCase();
         base = base.filter(t => (t.description || '').toLowerCase().includes(q));
+    }
+    // Column: created by (name or email)
+    if (colFilters.createdBy) {
+        const q = colFilters.createdBy.toLowerCase();
+        base = base.filter(t =>
+            (t.submitted_by_name  || '').toLowerCase().includes(q) ||
+            (t.submitted_by_email || '').toLowerCase().includes(q)
+        );
     }
     // Column: date range (filters on the same date shown in the DATE column: start_date, fallback created_at)
     if (colFilters.dateFrom) {
@@ -792,9 +821,10 @@ function clearDateColFilter() {
 
 function updateFilterIcons() {
     const map = {
-        ticket:   { icon: 'ticketFilterIcon',   active: !!colFilters.ticketNumber },
-        desc:     { icon: 'descFilterIcon',     active: !!colFilters.description },
-        date:     { icon: 'dateFilterIcon',     active: !!(colFilters.dateFrom || colFilters.dateTo) },
+        ticket:    { icon: 'ticketFilterIcon',    active: !!colFilters.ticketNumber },
+        desc:      { icon: 'descFilterIcon',      active: !!colFilters.description },
+        date:      { icon: 'dateFilterIcon',      active: !!(colFilters.dateFrom || colFilters.dateTo) },
+        createdBy: { icon: 'createdByFilterIcon', active: !!colFilters.createdBy },
     };
     Object.values(map).forEach(({ icon, active }) => {
         const el = document.getElementById(icon);

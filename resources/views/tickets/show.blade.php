@@ -1646,7 +1646,7 @@ function renderAttachments(attachments, isEmailWithHtml = false) {
                 </div>
                 <div class="flex gap-2 flex-shrink-0">
                     ${isImg ? `<a href="${url}" target="_blank" rel="noopener" class="text-xs text-blue-500 hover:underline">View</a>` : ''}
-                    <a href="${url}" target="_blank" rel="noopener" class="text-xs text-blue-500 hover:underline">Download</a>
+                    <a href="${url}" download="${escHtml(file.file_name)}" rel="noopener" class="text-xs text-blue-500 hover:underline">Download</a>
                 </div>
             </div>`;
     });

@@ -160,7 +160,7 @@
                                     : ($size > 1024 ? round($size / 1024) . ' KB' : $size . ' B');
                             @endphp
                             <a href="{{ $att['url'] }}"
-                               target="_blank"
+                               download="{{ $att['name'] }}"
                                rel="noopener"
                                class="flex items-center gap-2 text-xs text-blue-600 hover:text-blue-800 hover:underline">
                                 <svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
