@@ -307,6 +307,7 @@ class TicketController extends Controller
                     'customer_id'                => $s->customer_id,
                     'employee_id'                => null,
                     'description'                => $s->description,
+                    'delivery_name'              => null,
                     'ticket_priority'            => $s->ticket_priority,
                     'ticket_type'                => null,
                     'status'                     => 'pending',
@@ -359,8 +360,16 @@ class TicketController extends Controller
                 ->get()
                 ->keyBy('ticket_id');
 
+            // Bulk-load delivery support name per ticket (via delivery_support_activities)
+            $deliveryMap = DB::table('delivery_support_activities')
+                ->join('delivery_support', 'delivery_support.id', '=', 'delivery_support_activities.delivery_support_id')
+                ->whereIn('delivery_support_activities.ticket_id', $tickets->pluck('ticket_id'))
+                ->select('delivery_support_activities.ticket_id', 'delivery_support.name')
+                ->get()
+                ->keyBy('ticket_id');
+
             // ✅ Transform data untuk frontend
-            $ticketsData = $tickets->map(function($ticket) use ($unreadTicketIds, $approvedMandaysMap) {
+            $ticketsData = $tickets->map(function($ticket) use ($unreadTicketIds, $approvedMandaysMap, $deliveryMap) {
                 // ✅ Hitung pending confirmations untuk admin
                 $pendingCount = DB::table('ticket_confirmation')
                     ->where('ticket_id', $ticket->ticket_id)
@@ -394,6 +403,7 @@ class TicketController extends Controller
                     ] : null,
                     'end_customer_id'   => $ticket->end_customer_id,
                     'end_customer_name' => $ticket->endCustomer?->basicData?->name_1,
+                    'delivery_name'     => $deliveryMap[$ticket->ticket_id]->name ?? null,
                     'employee' => $ticket->employee ? [
                         'employee_id' => $ticket->employee->employee_id,
                         'employee_name' => $ticket->employee->basicData->first_name ?? 'Unknown',

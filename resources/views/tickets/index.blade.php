@@ -174,6 +174,9 @@
                             </div>
                         </th>
 
+                        {{-- Delivery --}}
+                        <th class="px-3 py-2.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide whitespace-nowrap border-b border-gray-200" style="min-width:150px;">Delivery</th>
+
                         {{-- Date: date range panel --}}
                         <th class="p-0 text-left whitespace-nowrap border-b border-gray-200 bg-gray-50 relative" style="min-width:100px;">
                             <button type="button" onclick="toggleColPanel('date', event)"
@@ -495,6 +498,7 @@ function createTicketRow(ticket) {
             <span class="block truncate" title="${escapeHtml(ticket.description || '')}">${escapeHtml(ticket.description || '—')}</span>
             ${ticket.end_customer_name ? `<span class="block text-xs text-gray-400 mt-0.5">&#8627; ${escapeHtml(ticket.end_customer_name)}</span>` : ''}
         </td>
+        <td class="px-3 py-2.5 text-sm text-gray-600 whitespace-nowrap">${ticket.delivery_name ? escapeHtml(ticket.delivery_name) : '<span class="text-gray-300 text-xs">—</span>'}</td>
         <td class="px-3 py-2.5 text-sm text-gray-600 whitespace-nowrap">${dateStr}</td>
         <td class="px-3 py-2.5 whitespace-nowrap">${badge(jInfo.label, jInfo.cls)}</td>
         <td class="px-3 py-2.5 whitespace-nowrap">${ticket.ticket_priority ? badge(ticket.ticket_priority, priorityCls) : '<span class="text-gray-300 text-xs">—</span>'}</td>
