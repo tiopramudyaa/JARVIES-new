@@ -436,10 +436,10 @@
                         @php
                             $statusOptions = [
                                 'open'                    => ['label' => 'Open',                  'color' => 'sky'],
-                                'in process'              => ['label' => 'In Process',            'color' => 'blue'],
-                                'waiting on customer'     => ['label' => 'Waiting on Customer',   'color' => 'amber'],
-                                'waiting on 3rd party'    => ['label' => 'Waiting on 3rd Party',  'color' => 'indigo'],
-                                'waiting to confirmation' => ['label' => 'Waiting Confirmation',  'color' => 'purple'],
+                                'inprocess'               => ['label' => 'In Process',            'color' => 'blue'],
+                                'waiting_on_customer'     => ['label' => 'Waiting on Customer',   'color' => 'amber'],
+                                'waiting_on_3rd_party'    => ['label' => 'Waiting on 3rd Party',  'color' => 'indigo'],
+                                'waiting_to_confirmation' => ['label' => 'Waiting Confirmation',  'color' => 'purple'],
                                 'hold'                    => ['label' => 'Hold',                  'color' => 'orange'],
                                 'cancelled'               => ['label' => 'Cancelled',             'color' => 'red'],
                                 'closed'                  => ['label' => 'Closed',                'color' => 'green'],
@@ -562,6 +562,29 @@
                     </div>
                     @endif
                 </div>
+
+                {{-- Deliverable Folder (OneDrive) --}}
+                {{-- Anonymous edit-link ke folder ticket di OneDrive (di-set EcoSystem saat --}}
+                {{-- deliverable pertama diupload). Scoped ke folder ticket → customer hanya --}}
+                {{-- melihat isi folder tiket ini, tidak bisa lihat customer lain. Ditampilkan --}}
+                {{-- tanpa memandang status agar deliverable tetap bisa diakses walau tiket closed. --}}
+                @if(!empty($ticket->onedrive_folder_url))
+                <div class="pt-4 border-t border-gray-100">
+                    <p class="text-xs font-bold text-gray-500 uppercase tracking-wide mb-3">Deliverable</p>
+                    <a href="{{ $ticket->onedrive_folder_url }}" target="_blank" rel="noopener noreferrer"
+                       class="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold border transition-all
+                              bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100">
+                        <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                  d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/>
+                        </svg>
+                        Open Deliverable Folder
+                    </a>
+                    <p class="mt-1.5 text-[11px] text-gray-400 leading-snug">
+                        Berisi dokumen deliverable untuk tiket ini.
+                    </p>
+                </div>
+                @endif
 
                 {{-- Customer Actions --}}
                 @if(!in_array($ticket->status, ['closed', 'cancelled']))
@@ -728,7 +751,9 @@
 
 <script src="https://cdn.quilljs.com/1.3.7/quill.min.js"></script>
 <script>
-const ticketId   = {{ $ticket->ticket_id }};
+const ticketId        = {{ $ticket->ticket_id }};
+const currentUserId   = {{ session('user.id') ?? 'null' }};
+const DRAFT_KEY       = `ticket_draft_${ticketId}_${currentUserId}`;
 const ticketDescription  = @json($ticket->description ?? '');
 const ticketCustomerName = @json(session('user.name') ?? session('user.company_name') ?? 'Customer');
 const ticketCreatedAt    = @json($ticket->created_at->toIso8601String());
@@ -833,6 +858,28 @@ document.addEventListener('DOMContentLoaded', function () {
         });
         this.value = '';
         renderAttachmentPreview();
+    });
+
+    // ── Draft restore ─────────────────────────────────────────────────────────
+    const savedDraft = localStorage.getItem(DRAFT_KEY);
+    if (savedDraft) {
+        try { quill.setContents(JSON.parse(savedDraft), 'api'); }
+        catch { localStorage.removeItem(DRAFT_KEY); }
+    }
+
+    // ── Draft auto-save (debounce 1 s) ────────────────────────────────────────
+    let _draftTimer;
+    quill.on('text-change', function(delta, old, source) {
+        if (source !== 'user') return;
+        clearTimeout(_draftTimer);
+        _draftTimer = setTimeout(function() {
+            const hasText = quill.getText().trim().length > 0;
+            if (hasText) {
+                try { localStorage.setItem(DRAFT_KEY, JSON.stringify(quill.getContents())); } catch {}
+            } else {
+                localStorage.removeItem(DRAFT_KEY);
+            }
+        }, 1000);
     });
 
     renderCcTags();
@@ -1599,7 +1646,7 @@ function renderAttachments(attachments, isEmailWithHtml = false) {
                 </div>
                 <div class="flex gap-2 flex-shrink-0">
                     ${isImg ? `<a href="${url}" target="_blank" rel="noopener" class="text-xs text-blue-500 hover:underline">View</a>` : ''}
-                    <a href="${url}" target="_blank" rel="noopener" class="text-xs text-blue-500 hover:underline">Download</a>
+                    <a href="${url}" download="${escHtml(file.file_name)}" rel="noopener" class="text-xs text-blue-500 hover:underline">Download</a>
                 </div>
             </div>`;
     });
@@ -1712,6 +1759,7 @@ async function sendReply() {
 
         if (data.success) {
             quill.setContents([]);
+            localStorage.removeItem(DRAFT_KEY);
             resetAttachments();
             await loadMessages();
             refreshIndicator();
@@ -1767,20 +1815,20 @@ function renderSidebarTickets(tickets) {
     const prioLabelMap = { 'Very High': 'V.High', 'High': 'High', 'Medium': 'Med', 'Low': 'Low' };
     const statusClsMap = {
         'open':                    'sb-jstat-open',
-        'in process':              'sb-jstat-in-process',
-        'waiting on customer':     'sb-jstat-wait-customer',
-        'waiting on 3rd party':    'sb-jstat-wait-3rdparty',
-        'waiting to confirmation': 'sb-jstat-wait-confirm',
+        'inprocess':               'sb-jstat-in-process',
+        'waiting_on_customer':     'sb-jstat-wait-customer',
+        'waiting_on_3rd_party':    'sb-jstat-wait-3rdparty',
+        'waiting_to_confirmation': 'sb-jstat-wait-confirm',
         'hold':                    'sb-jstat-hold',
         'cancelled':               'sb-jstat-cancelled',
         'closed':                  'sb-jstat-closed',
     };
     const statusLabelMap = {
         'open':                    'Open',
-        'in process':              'In Process',
-        'waiting on customer':     'Wait Customer',
-        'waiting on 3rd party':    'Wait 3rd Party',
-        'waiting to confirmation': 'Wait Confirm',
+        'inprocess':               'In Process',
+        'waiting_on_customer':     'Wait Customer',
+        'waiting_on_3rd_party':    'Wait 3rd Party',
+        'waiting_to_confirmation': 'Wait Confirm',
         'hold':                    'Hold',
         'cancelled':               'Cancelled',
         'closed':                  'Closed',
@@ -2082,10 +2130,10 @@ async function doCancelTicket() {
 
 const statusColors = {
     'open':                    { bg: 'bg-sky-100',    text: 'text-sky-700',    border: 'border-sky-400',    ring: 'ring-sky-400',    dot: 'bg-sky-500 border-sky-500' },
-    'in process':              { bg: 'bg-blue-100',   text: 'text-blue-700',   border: 'border-blue-400',   ring: 'ring-blue-400',   dot: 'bg-blue-500 border-blue-500' },
-    'waiting on customer':     { bg: 'bg-amber-100',  text: 'text-amber-700',  border: 'border-amber-400',  ring: 'ring-amber-400',  dot: 'bg-amber-500 border-amber-500' },
-    'waiting on 3rd party':    { bg: 'bg-indigo-100', text: 'text-indigo-700', border: 'border-indigo-400', ring: 'ring-indigo-400', dot: 'bg-indigo-500 border-indigo-500' },
-    'waiting to confirmation': { bg: 'bg-purple-100', text: 'text-purple-700', border: 'border-purple-400', ring: 'ring-purple-400', dot: 'bg-purple-500 border-purple-500' },
+    'inprocess':               { bg: 'bg-blue-100',   text: 'text-blue-700',   border: 'border-blue-400',   ring: 'ring-blue-400',   dot: 'bg-blue-500 border-blue-500' },
+    'waiting_on_customer':     { bg: 'bg-amber-100',  text: 'text-amber-700',  border: 'border-amber-400',  ring: 'ring-amber-400',  dot: 'bg-amber-500 border-amber-500' },
+    'waiting_on_3rd_party':    { bg: 'bg-indigo-100', text: 'text-indigo-700', border: 'border-indigo-400', ring: 'ring-indigo-400', dot: 'bg-indigo-500 border-indigo-500' },
+    'waiting_to_confirmation': { bg: 'bg-purple-100', text: 'text-purple-700', border: 'border-purple-400', ring: 'ring-purple-400', dot: 'bg-purple-500 border-purple-500' },
     'hold':                    { bg: 'bg-orange-100', text: 'text-orange-700', border: 'border-orange-400', ring: 'ring-orange-400', dot: 'bg-orange-500 border-orange-500' },
     'cancelled':               { bg: 'bg-red-100',    text: 'text-red-700',    border: 'border-red-400',    ring: 'ring-red-400',    dot: 'bg-red-500 border-red-500' },
     'closed':                  { bg: 'bg-green-100',  text: 'text-green-700',  border: 'border-green-400',  ring: 'ring-green-400',  dot: 'bg-green-500 border-green-500' },

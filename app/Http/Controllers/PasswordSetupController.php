@@ -239,7 +239,7 @@ class PasswordSetupController extends Controller
                 ? $ecoBase . '/change-password?token=' . $token
                 : route('password-setup.change', ['token' => $token]);
             $appName    = config('app.name', 'ECoSystem');
-            $senderName = env('MS_SENDER_NAME', $appName);
+            $senderName = config('services.microsoft_graph.sender_name', $appName);
             $appUrl     = rtrim(config('app.url', ''), '/');
 
             if ($type === 'reset') {
@@ -347,11 +347,11 @@ HTML;
                 $bodyText = "Hello,\r\n\r\nYour account in {$appName} has been created by our team.\r\n\r\nUse the following link to set your password (valid for 24 hours):\r\n{$link}\r\n\r\nIf you have any questions, please contact the administrator.\r\n\r\nBest regards,\r\nThe {$appName} Team";
             }
 
-            $sender     = env('MS_SENDER_EMAIL');
+            $sender     = config('services.microsoft_graph.sender_email');
             $graphToken = self::getGraphToken();
 
             Http::withToken($graphToken)->post(
-                rtrim(env('GRAPH_BASE_URL', 'https://graph.microsoft.com/v1.0'), '/') . "/users/{$sender}/sendMail",
+                rtrim(config('services.microsoft_graph.base_url', 'https://graph.microsoft.com/v1.0'), '/') . "/users/{$sender}/sendMail",
                 [
                     'message' => [
                         'subject' => $subject,
@@ -398,25 +398,33 @@ HTML;
     }
 
     /**
-     * Ambil OAuth2 access token dari Microsoft.
+     * Ambil OAuth2 access token dari Microsoft, di-cache selama token masih valid
+     * (client_credentials token Graph biasanya berlaku 3600s) supaya tiap kirim
+     * email set-password/reset tidak selalu round-trip OAuth baru.
      */
     private static function getGraphToken(): string
     {
-        $tenantId = env('MS_TENANT_ID');
-        $response = Http::asForm()->post(
-            "https://login.microsoftonline.com/{$tenantId}/oauth2/v2.0/token",
-            [
-                'grant_type'    => 'client_credentials',
-                'client_id'     => env('MS_CLIENT_ID'),
-                'client_secret' => env('MS_CLIENT_SECRET'),
-                'scope'         => 'https://graph.microsoft.com/.default',
-            ]
+        return \Illuminate\Support\Facades\Cache::remember(
+            'password_setup.ms_graph_token',
+            3300, // 55 menit — buffer di bawah masa berlaku token (~60 menit)
+            function () {
+                $tenantId = config('services.microsoft_graph.tenant_id');
+                $response = Http::asForm()->post(
+                    "https://login.microsoftonline.com/{$tenantId}/oauth2/v2.0/token",
+                    [
+                        'grant_type'    => 'client_credentials',
+                        'client_id'     => config('services.microsoft_graph.client_id'),
+                        'client_secret' => config('services.microsoft_graph.client_secret'),
+                        'scope'         => 'https://graph.microsoft.com/.default',
+                    ]
+                );
+
+                if (!$response->successful()) {
+                    throw new \RuntimeException('Failed to obtain access token: ' . $response->body());
+                }
+
+                return $response->json('access_token');
+            }
         );
-
-        if (!$response->successful()) {
-            throw new \RuntimeException('Failed to obtain access token: ' . $response->body());
-        }
-
-        return $response->json('access_token');
     }
 }

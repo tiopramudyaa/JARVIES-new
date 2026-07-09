@@ -55,19 +55,19 @@
                 <p class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Open</p>
                 <p class="text-2xl font-bold text-sky-600" id="openCount">0</p>
             </div>
-            <div id="filterInprocess" class="bg-white rounded-xl border border-gray-100 p-4 hover:shadow-md transition-all duration-200 cursor-pointer" onclick="filterTickets('in process')">
+            <div id="filterInprocess" class="bg-white rounded-xl border border-gray-100 p-4 hover:shadow-md transition-all duration-200 cursor-pointer" onclick="filterTickets('inprocess')">
                 <p class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">In Process</p>
                 <p class="text-2xl font-bold text-blue-600" id="processCount">0</p>
             </div>
-            <div id="filterWaitingCustomer" class="bg-white rounded-xl border border-gray-100 p-4 hover:shadow-md transition-all duration-200 cursor-pointer" onclick="filterTickets('waiting on customer')">
+            <div id="filterWaitingCustomer" class="bg-white rounded-xl border border-gray-100 p-4 hover:shadow-md transition-all duration-200 cursor-pointer" onclick="filterTickets('waiting_on_customer')">
                 <p class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Wait Customer</p>
                 <p class="text-2xl font-bold text-amber-600" id="waitingCustomerCount">0</p>
             </div>
-            <div id="filterWaiting3rdParty" class="bg-white rounded-xl border border-gray-100 p-4 hover:shadow-md transition-all duration-200 cursor-pointer" onclick="filterTickets('waiting on 3rd party')">
+            <div id="filterWaiting3rdParty" class="bg-white rounded-xl border border-gray-100 p-4 hover:shadow-md transition-all duration-200 cursor-pointer" onclick="filterTickets('waiting_on_3rd_party')">
                 <p class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Wait 3rd Party</p>
                 <p class="text-2xl font-bold text-indigo-600" id="waiting3rdPartyCount">0</p>
             </div>
-            <div id="filterWaitingConfirmation" class="bg-white rounded-xl border border-gray-100 p-4 hover:shadow-md transition-all duration-200 cursor-pointer" onclick="filterTickets('waiting to confirmation')">
+            <div id="filterWaitingConfirmation" class="bg-white rounded-xl border border-gray-100 p-4 hover:shadow-md transition-all duration-200 cursor-pointer" onclick="filterTickets('waiting_to_confirmation')">
                 <p class="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Wait Confirm</p>
                 <p class="text-2xl font-bold text-purple-600" id="waitingConfirmationCount">0</p>
             </div>
@@ -86,10 +86,21 @@
 
 {{-- Pagination --}}
 <div class="flex items-center justify-between mb-4">
-    <span class="text-sm text-gray-500">
-        <span id="currentRangeStart">1</span>-<span id="currentRangeEnd">20</span>
-        of <span id="totalItems">0</span> tickets
-    </span>
+    <div class="flex items-center gap-4">
+        @if($isCustomerAdmin)
+        {{-- Scope toggle: My Tickets / All Tickets (customer admin only) --}}
+        <div class="inline-flex rounded-lg border border-gray-200 bg-gray-100 p-0.5">
+            <button type="button" id="scopeBtnMine" onclick="setTicketScope('mine')"
+                    class="px-3 py-1.5 text-xs font-semibold rounded-md transition-all">My Tickets</button>
+            <button type="button" id="scopeBtnAll" onclick="setTicketScope('all')"
+                    class="px-3 py-1.5 text-xs font-semibold rounded-md transition-all">All Tickets</button>
+        </div>
+        @endif
+        <span class="text-sm text-gray-500">
+            <span id="currentRangeStart">1</span>-<span id="currentRangeEnd">20</span>
+            of <span id="totalItems">0</span> tickets
+        </span>
+    </div>
     <div class="flex items-center gap-1">
         <button onclick="previousPage()" id="btnPrevPage" disabled
                 class="p-1.5 rounded-lg border border-gray-200 hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed transition-all">
@@ -214,7 +225,26 @@
                         <th class="px-3 py-2.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide whitespace-nowrap border-b border-gray-200" style="min-width:130px;">Type</th>
 
                         <th class="px-3 py-2.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide whitespace-nowrap border-b border-gray-200" style="min-width:100px;">Man Days</th>
-                        <th class="px-3 py-2.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wide whitespace-nowrap border-b border-gray-200" style="min-width:130px;">Created By</th>
+                        {{-- Created By: text search panel --}}
+                        <th class="p-0 text-left whitespace-nowrap border-b border-gray-200 bg-gray-50 relative" style="min-width:160px;">
+                            <button type="button" onclick="toggleColPanel('createdBy', event)"
+                                    class="w-full flex items-center gap-1.5 px-3 py-2.5 hover:bg-gray-100 transition-colors">
+                                <span class="text-xs font-semibold text-gray-600 uppercase tracking-wide">Created By</span>
+                                <svg id="createdByCaret" class="w-3 h-3 text-gray-400 transition-transform shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/></svg>
+                                <svg id="createdByFilterIcon" class="w-3 h-3 text-gray-300 transition-colors shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M3 5a1 1 0 011-1h12a1 1 0 011 1v1.586a1 1 0 01-.293.707l-4.121 4.121A1 1 0 0112 12.121V15.5l-4 1.5v-4.879a1 1 0 00-.293-.707L3.586 7.293A1 1 0 013.293 6.586L3 5z" clip-rule="evenodd"/></svg>
+                            </button>
+                            <div id="createdByPanel" class="col-filter-panel hidden fixed bg-white rounded-xl shadow-2xl border border-gray-100 z-[9999] p-3" style="min-width:240px;">
+                                <label class="block text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1">Search created by</label>
+                                <input type="text" id="createdByFilterInput" placeholder="Name or email…"
+                                       class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-red-400"
+                                       oninput="colFilters.createdBy=this.value; applyColFilters();" onclick="event.stopPropagation()">
+                                <p class="text-[10px] text-gray-400 mt-1.5">Matches name or email of the ticket submitter.</p>
+                                <div class="flex justify-end gap-2 mt-3">
+                                    <button type="button" onclick="clearColFilter('createdBy','createdByFilterInput')" class="px-3 py-1.5 text-xs text-gray-600 border border-gray-200 rounded-md hover:bg-gray-50">Clear</button>
+                                    <button type="button" onclick="closeColPanel('createdBy')" class="px-3 py-1.5 text-xs text-white bg-red-700 hover:bg-red-800 rounded-md">Done</button>
+                                </div>
+                            </div>
+                        </th>
                     </tr>
                 </thead>
                 <tbody id="ticketsListBody" class="divide-y divide-gray-100 bg-white"></tbody>
@@ -320,13 +350,13 @@
 let allTickets      = [];
 let filteredTickets = [];
 let currentFilter   = 'all';
-let ticketScope     = 'mine';   // 'mine' | 'all'  (only relevant for customer admin)
+let ticketScope     = 'all';    // 'mine' | 'all'  (only relevant for customer admin)
 let currentPage     = 1;
 let itemsPerPage    = 20;
 let totalItems      = 0;
 let totalPages      = 0;
 
-let colFilters  = { ticketNumber: '', description: '', dateFrom: '', dateTo: '' };
+let colFilters  = { ticketNumber: '', description: '', dateFrom: '', dateTo: '', createdBy: '' };
 let sortField   = 'last_update';
 let sortDir     = 'desc';
 let openPanel   = null;
@@ -338,6 +368,7 @@ const USER_EMAIL        = '{{ $userEmail }}';
 
 // ==================== INIT ====================
 document.addEventListener('DOMContentLoaded', function() {
+    updateScopeButtons();
     loadTickets();
     startPolling();
 
@@ -406,10 +437,10 @@ function updateStats() {
     const base = getScopedTickets();
     document.getElementById('totalCount').textContent              = base.length;
     document.getElementById('openCount').textContent               = base.filter(t => t.status === 'open').length;
-    document.getElementById('processCount').textContent            = base.filter(t => t.status === 'in process').length;
-    document.getElementById('waitingCustomerCount').textContent    = base.filter(t => t.status === 'waiting on customer').length;
-    document.getElementById('waiting3rdPartyCount').textContent    = base.filter(t => t.status === 'waiting on 3rd party').length;
-    document.getElementById('waitingConfirmationCount').textContent= base.filter(t => t.status === 'waiting to confirmation').length;
+    document.getElementById('processCount').textContent            = base.filter(t => t.status === 'inprocess').length;
+    document.getElementById('waitingCustomerCount').textContent    = base.filter(t => t.status === 'waiting_on_customer').length;
+    document.getElementById('waiting3rdPartyCount').textContent    = base.filter(t => t.status === 'waiting_on_3rd_party').length;
+    document.getElementById('waitingConfirmationCount').textContent= base.filter(t => t.status === 'waiting_to_confirmation').length;
     document.getElementById('holdCount').textContent               = base.filter(t => t.status === 'hold').length;
     document.getElementById('closedCount').textContent             = base.filter(t => t.status === 'closed').length;
 }
@@ -437,13 +468,13 @@ function createTicketRow(ticket) {
     const href      = isStaging ? `/tickets/staging/${ticket.staging_id}` : `/tickets/${ticket.ticket_id}`;
 
     const lastActivity = new Date(ticket.last_message_at || ticket.created_at);
-    const createdAt    = new Date(ticket.created_at);
+    const startDate     = new Date(ticket.start_date || ticket.created_at);
     const fmt   = d => d.toLocaleDateString('en-GB', { timeZone: 'Asia/Jakarta', day: '2-digit', month: 'short', year: 'numeric' });
     const fmtDT = d => d.toLocaleString('en-GB',    { timeZone: 'Asia/Jakarta', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
 
     const lastUpdateStr   = relativeTime(lastActivity);
     const lastUpdateTitle = fmtDT(lastActivity);
-    const dateStr         = fmt(createdAt);
+    const dateStr         = fmt(startDate);
 
     // Unread: agent replied more recently than customer's last reply
     const lastAgent    = ticket.last_agent_reply_at  ? new Date(ticket.last_agent_reply_at)  : null;
@@ -457,10 +488,10 @@ function createTicketRow(ticket) {
 
     const statusMap = {
         'open':                    { label: 'Open',                  cls: 'bg-sky-50 text-sky-700' },
-        'in process':              { label: 'In Process',            cls: 'bg-blue-50 text-blue-700' },
-        'waiting on customer':     { label: 'Waiting on Customer',   cls: 'bg-amber-50 text-amber-700' },
-        'waiting on 3rd party':    { label: 'Waiting on 3rd Party',  cls: 'bg-indigo-50 text-indigo-700' },
-        'waiting to confirmation': { label: 'Waiting Confirmation',  cls: 'bg-purple-50 text-purple-700' },
+        'inprocess':               { label: 'In Process',            cls: 'bg-blue-50 text-blue-700' },
+        'waiting_on_customer':     { label: 'Waiting on Customer',   cls: 'bg-amber-50 text-amber-700' },
+        'waiting_on_3rd_party':    { label: 'Waiting on 3rd Party',  cls: 'bg-indigo-50 text-indigo-700' },
+        'waiting_to_confirmation': { label: 'Waiting Confirmation',  cls: 'bg-purple-50 text-purple-700' },
         'hold':                    { label: 'Hold',                  cls: 'bg-orange-50 text-orange-700' },
         'cancelled':               { label: 'Cancelled',             cls: 'bg-red-50 text-red-700' },
         'closed':                  { label: 'Closed',                cls: 'bg-green-50 text-green-700' },
@@ -530,6 +561,24 @@ function getScopedTickets() {
     );
 }
 
+function setTicketScope(scope) {
+    ticketScope = scope === 'mine' ? 'mine' : 'all';
+    updateScopeButtons();
+    updateStats();
+    applyColFilters();
+}
+
+function updateScopeButtons() {
+    const mine = document.getElementById('scopeBtnMine');
+    const all  = document.getElementById('scopeBtnAll');
+    if (!mine || !all) return;
+    const active   = 'px-3 py-1.5 text-xs font-semibold rounded-md transition-all bg-white text-red-700 shadow-sm';
+    const inactive = 'px-3 py-1.5 text-xs font-semibold rounded-md transition-all text-gray-500 hover:text-gray-700';
+    const isMine   = ticketScope === 'mine';
+    mine.className = isMine ? active : inactive;
+    all.className  = isMine ? inactive : active;
+}
+
 // ==================== FILTERS ====================
 function filterTickets(status) {
     currentFilter = status;
@@ -537,10 +586,10 @@ function filterTickets(status) {
     const cardMap = {
         'all':                    'filterAll',
         'open':                   'filterOpen',
-        'in process':             'filterInprocess',
-        'waiting on customer':    'filterWaitingCustomer',
-        'waiting on 3rd party':   'filterWaiting3rdParty',
-        'waiting to confirmation':'filterWaitingConfirmation',
+        'inprocess':              'filterInprocess',
+        'waiting_on_customer':    'filterWaitingCustomer',
+        'waiting_on_3rd_party':   'filterWaiting3rdParty',
+        'waiting_to_confirmation':'filterWaitingConfirmation',
         'hold':                   'filterHold',
         'closed':                 'filterClosed',
     };
@@ -562,7 +611,7 @@ function filterTickets(status) {
 }
 
 function resetFilters() {
-    colFilters = { ticketNumber: '', description: '', dateFrom: '', dateTo: '' };
+    colFilters = { ticketNumber: '', description: '', dateFrom: '', dateTo: '', createdBy: '' };
     const ticketInput = document.getElementById('ticketFilterInput');
     if (ticketInput) ticketInput.value = '';
     const descInput = document.getElementById('descFilterInput');
@@ -571,6 +620,8 @@ function resetFilters() {
     if (dateFrom)  dateFrom.value = '';
     const dateTo    = document.getElementById('dateFilterTo');
     if (dateTo)    dateTo.value = '';
+    const createdByInput = document.getElementById('createdByFilterInput');
+    if (createdByInput) createdByInput.value = '';
 
     currentFilter = 'all';
     filterTickets('all');
@@ -665,7 +716,7 @@ function closeColPanel(name) {
 }
 
 function closeAllPanels() {
-    ['ticket', 'desc', 'date'].forEach(n => closeColPanel(n));
+    ['ticket', 'desc', 'date', 'createdBy'].forEach(n => closeColPanel(n));
 }
 
 document.addEventListener('click', function() { closeAllPanels(); });
@@ -690,12 +741,20 @@ function applyColFilters() {
         const q = colFilters.description.toLowerCase();
         base = base.filter(t => (t.description || '').toLowerCase().includes(q));
     }
-    // Column: date range
+    // Column: created by (name or email)
+    if (colFilters.createdBy) {
+        const q = colFilters.createdBy.toLowerCase();
+        base = base.filter(t =>
+            (t.submitted_by_name  || '').toLowerCase().includes(q) ||
+            (t.submitted_by_email || '').toLowerCase().includes(q)
+        );
+    }
+    // Column: date range (filters on the same date shown in the DATE column: start_date, fallback created_at)
     if (colFilters.dateFrom) {
-        base = base.filter(t => (t.created_at || '').slice(0, 10) >= colFilters.dateFrom);
+        base = base.filter(t => (t.start_date || t.created_at || '').slice(0, 10) >= colFilters.dateFrom);
     }
     if (colFilters.dateTo) {
-        base = base.filter(t => (t.created_at || '').slice(0, 10) <= colFilters.dateTo);
+        base = base.filter(t => (t.start_date || t.created_at || '').slice(0, 10) <= colFilters.dateTo);
     }
     filteredTickets = sortTicketsList(base);
     currentPage = 1;
@@ -766,9 +825,10 @@ function clearDateColFilter() {
 
 function updateFilterIcons() {
     const map = {
-        ticket:   { icon: 'ticketFilterIcon',   active: !!colFilters.ticketNumber },
-        desc:     { icon: 'descFilterIcon',     active: !!colFilters.description },
-        date:     { icon: 'dateFilterIcon',     active: !!(colFilters.dateFrom || colFilters.dateTo) },
+        ticket:    { icon: 'ticketFilterIcon',    active: !!colFilters.ticketNumber },
+        desc:      { icon: 'descFilterIcon',      active: !!colFilters.description },
+        date:      { icon: 'dateFilterIcon',      active: !!(colFilters.dateFrom || colFilters.dateTo) },
+        createdBy: { icon: 'createdByFilterIcon', active: !!colFilters.createdBy },
     };
     Object.values(map).forEach(({ icon, active }) => {
         const el = document.getElementById(icon);

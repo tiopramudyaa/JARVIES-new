@@ -134,8 +134,9 @@ Route::middleware('jarvies.auth')->group(function () {
         Route::get('/identifications/{identId}',   [CustomerApiController::class, 'identification'])->whereNumber('identId');
         Route::get('/banks',                       [CustomerApiController::class, 'banks']);
         Route::get('/banks/{bankId}',              [CustomerApiController::class, 'bank'])->whereNumber('bankId');
-        Route::get('/attachments',                 [CustomerApiController::class, 'attachments']);
-        Route::get('/attachments/{attachmentId}',  [CustomerApiController::class, 'attachment'])->whereNumber('attachmentId');
+        Route::get('/attachments',                          [CustomerApiController::class, 'attachments']);
+        Route::get('/attachments/{attachmentId}',           [CustomerApiController::class, 'attachment'])->whereNumber('attachmentId');
+        Route::get('/attachments/{attachmentId}/download',  [CustomerApiController::class, 'downloadAttachment'])->whereNumber('attachmentId');
     });
 
 });

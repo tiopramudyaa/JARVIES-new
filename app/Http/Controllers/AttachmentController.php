@@ -6,6 +6,7 @@ use App\Models\Ticket;
 use App\Models\TicketAttachment;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 
 /**
  * AttachmentController
@@ -40,9 +41,22 @@ class AttachmentController extends Controller
             return $this->fetchFromGraph($attachment);
         }
 
-        // Fallback: file lokal lama
+        // Fallback: file lokal lama — serve langsung agar Content-Disposition terpasang (nama asli, bukan UUID)
         if ($attachment->file_path) {
-            return redirect('/storage/' . $attachment->file_path);
+            if (!Storage::disk('public')->exists($attachment->file_path)) {
+                abort(404, 'File not found');
+            }
+            $fileName    = $attachment->file_name ?? basename($attachment->file_path);
+            $mime        = $attachment->mime_type ?? 'application/octet-stream';
+            $isInline    = $attachment->is_inline ?? false;
+            $disposition = $isInline ? 'inline' : 'attachment';
+            $asciiName   = str_replace(['"', '\\', "\r", "\n"], '', preg_replace('/[^\x20-\x7E]/', '_', $fileName));
+
+            return response()->file(Storage::disk('public')->path($attachment->file_path), [
+                'Content-Type'        => $mime,
+                'Content-Disposition' => $disposition . '; filename="' . $asciiName . '"; filename*=UTF-8\'\'' . rawurlencode($fileName),
+                'Cache-Control'       => 'private, max-age=3600',
+            ]);
         }
 
         // Fallback: link langsung
@@ -59,10 +73,10 @@ class AttachmentController extends Controller
      */
     private function fetchFromGraph(TicketAttachment $attachment)
     {
-        $tenantId     = env('MS_TENANT_ID');
-        $clientId     = env('MS_CLIENT_ID');
-        $clientSecret = env('MS_CLIENT_SECRET');
-        $sender       = env('MS_SENDER_EMAIL');
+        $tenantId     = config('services.microsoft_graph.tenant_id');
+        $clientId     = config('services.microsoft_graph.client_id');
+        $clientSecret = config('services.microsoft_graph.client_secret');
+        $sender       = config('services.microsoft_graph.sender_email');
 
         if (!$tenantId || !$clientId || !$clientSecret || !$sender) {
             Log::error('AttachmentController: MS credentials not configured');
@@ -88,7 +102,7 @@ class AttachmentController extends Controller
         }
 
         $accessToken = $tokenRes->json('access_token');
-        $baseUrl     = rtrim(env('GRAPH_BASE_URL', 'https://graph.microsoft.com/v1.0'), '/');
+        $baseUrl     = rtrim(config('services.microsoft_graph.base_url', 'https://graph.microsoft.com/v1.0'), '/');
 
         $res = Http::withToken($accessToken)
             ->get("{$baseUrl}/users/{$sender}/messages/{$attachment->graph_message_id}/attachments/{$attachment->graph_attachment_id}");
@@ -108,10 +122,11 @@ class AttachmentController extends Controller
         $fileName     = $data['name'] ?? ($attachment->file_name ?? 'attachment');
         $isInline     = $attachment->is_inline ?? false;
         $disposition  = $isInline ? 'inline' : 'attachment';
+        $asciiName    = str_replace(['"', '\\', "\r", "\n"], '', preg_replace('/[^\x20-\x7E]/', '_', $fileName));
 
         return response($contentBytes, 200)
             ->header('Content-Type', $contentType)
-            ->header('Content-Disposition', "{$disposition}; filename=\"{$fileName}\"")
+            ->header('Content-Disposition', $disposition . '; filename="' . $asciiName . '"; filename*=UTF-8\'\'' . rawurlencode($fileName))
             ->header('Cache-Control', 'private, max-age=3600')
             ->header('Content-Length', strlen($contentBytes));
     }

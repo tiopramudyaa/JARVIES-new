@@ -31,17 +31,17 @@ class GraphRelayService
 
     public function __construct()
     {
-        $this->graphBase = rtrim(env('GRAPH_BASE_URL', 'https://graph.microsoft.com/v1.0'), '/');
-        $this->sender    = env('MS_SENDER_EMAIL', '');
+        $this->graphBase = rtrim(config('services.microsoft_graph.base_url', 'https://graph.microsoft.com/v1.0'), '/');
+        $this->sender    = config('services.microsoft_graph.sender_email', '');
     }
 
     // ─── Auth ─────────────────────────────────────────────────────────────────
 
     private function getAccessToken(): ?string
     {
-        $tenantId     = env('MS_TENANT_ID');
-        $clientId     = env('MS_CLIENT_ID');
-        $clientSecret = env('MS_CLIENT_SECRET');
+        $tenantId     = config('services.microsoft_graph.tenant_id');
+        $clientId     = config('services.microsoft_graph.client_id');
+        $clientSecret = config('services.microsoft_graph.client_secret');
 
         $response = Http::asForm()->post(
             "https://login.microsoftonline.com/{$tenantId}/oauth2/v2.0/token",
@@ -404,8 +404,12 @@ class GraphRelayService
             return null;
         }
 
-        $subject = 'Ticket #' . ($ticket->ticket_number ?? $ticket->ticket_id)
-            . ': ' . mb_substr($ticket->description ?? '', 0, 80);
+        // Subject HARUS identik EcoSystem (prefix [JARVIES], spasi " : ", mb_substr) agar
+        // subject konsisten dari arah manapun. Dipakai saat membuat thread baru
+        // (customer chat duluan dari Jarvies); pada reply thread existing subject
+        // diwarisi otomatis oleh Graph (createReplyDraft tidak mem-PATCH subject).
+        $subject = '[JARVIES] #' . ($ticket->ticket_number ?? $ticket->ticket_id)
+            . ' : ' . mb_substr($ticket->description ?? '', 0, 80);
 
         // Bungkus pesan dengan atribusi pengirim (format sama dengan EcoSystem relay)
         $wrappedBody = '<p><em>[Message from ' . htmlspecialchars($senderName) . ' via Jarvies]</em></p>'

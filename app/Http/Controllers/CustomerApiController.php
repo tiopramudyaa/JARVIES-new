@@ -168,4 +168,36 @@ class CustomerApiController extends Controller
 
         return $this->proxy("/jarvies/customers/{$customerId}/attachments/{$attachmentId}");
     }
+
+    public function downloadAttachment(int $customerId, int $attachmentId): \Illuminate\Http\Response
+    {
+        if (!$this->authorize($customerId)) {
+            abort(403);
+        }
+
+        try {
+            $response = Http::withHeaders([
+                'X-Api-Key' => $this->apiKey(),
+            ])->timeout(30)->get($this->ecosystemBase() . "/jarvies/customers/{$customerId}/attachments/{$attachmentId}/download");
+
+            if (!$response->successful()) {
+                abort($response->status());
+            }
+
+            $headers = [];
+            if ($ct = $response->header('Content-Type'))        $headers['Content-Type']        = $ct;
+            if ($cd = $response->header('Content-Disposition'))  $headers['Content-Disposition']  = $cd;
+            if ($cl = $response->header('Content-Length'))       $headers['Content-Length']       = $cl;
+
+            return response($response->body(), 200, $headers);
+
+        } catch (\Throwable $e) {
+            Log::error('CustomerApiController: downloadAttachment proxy failed', [
+                'customer_id'   => $customerId,
+                'attachment_id' => $attachmentId,
+                'error'         => $e->getMessage(),
+            ]);
+            abort(503);
+        }
+    }
 }

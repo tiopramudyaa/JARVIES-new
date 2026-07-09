@@ -85,6 +85,95 @@ class TicketController extends Controller
     }
 
     /**
+     * Apakah customer (role 3) yang login boleh melihat SEMUA tiket company-nya.
+     * Admin = true (can_view_all_tickets), Member = false (hanya tiket sendiri).
+     * Default true untuk akun lama tanpa flag.
+     */
+    private function customerCanViewAll(array $sessionUser): bool
+    {
+        if (array_key_exists('can_view_all_tickets', $sessionUser)) {
+            return (bool) $sessionUser['can_view_all_tickets'];
+        }
+
+        // Fallback: baca langsung dari auth_users bila session belum membawa flag.
+        $authUser = DB::table('auth_users')
+            ->where('customer_id', $sessionUser['id'])
+            ->where('email', $sessionUser['email'])
+            ->first();
+
+        return $authUser ? (bool) $authUser->can_view_all_tickets : true;
+    }
+
+    /**
+     * Terapkan filter visibility tiket untuk customer ke query Eloquent/Builder.
+     * - customer_id WAJIB cocok (batas company).
+     * - Member dibatasi ke tiket yang ia submit sendiri (submitted_by_email).
+     * Tiket email dari domain company yang belum terdaftar sebagai contact sudah
+     * ter-attribute ke customer_id company yang benar oleh EcoSystem saat intake,
+     * sehingga Admin tetap melihatnya lewat filter customer_id.
+     */
+    private function applyCustomerTicketVisibility($query, array $sessionUser, string $column = 'submitted_by_email')
+    {
+        $query->where('customer_id', $sessionUser['id']);
+
+        if (!$this->customerCanViewAll($sessionUser)) {
+            $query->where($column, $sessionUser['email']);
+        }
+
+        return $query;
+    }
+
+    /**
+     * Kembalikan ticket_id dari delivery support activities yang DS-nya memiliki contact ini sebagai PIC.
+     * Relasi: delivery_support_customer_pics → delivery_support → delivery_support_activities → ticket_id
+     * Mengembalikan Collection kosong jika contact_id null atau tidak ada DS PIC.
+     */
+    private function getDsPicTicketIds(?int $contactId): \Illuminate\Support\Collection
+    {
+        if (!$contactId) {
+            return collect();
+        }
+
+        return DB::table('delivery_support_customer_pics')
+            ->join('delivery_support_activities',
+                'delivery_support_customer_pics.delivery_support_id',
+                '=',
+                'delivery_support_activities.delivery_support_id')
+            ->where('delivery_support_customer_pics.contact_id', $contactId)
+            ->whereNotNull('delivery_support_activities.ticket_id')
+            ->pluck('delivery_support_activities.ticket_id')
+            ->unique()
+            ->values();
+    }
+
+    /**
+     * Apakah customer boleh mengakses satu tiket spesifik (detail / reply / mandays).
+     * Admin: semua tiket company. Member: hanya tiket yang ia submit.
+     * DS PIC: boleh akses ticket yang terhubung ke DS di mana mereka terdaftar sebagai PIC.
+     */
+    private function customerCanAccessTicket(array $sessionUser, Ticket $ticket): bool
+    {
+        if ($ticket->customer_id != $sessionUser['id']) {
+            return false;
+        }
+
+        if ($this->customerCanViewAll($sessionUser)) {
+            return true;
+        }
+
+        // Cek apakah ticket ini terhubung ke DS di mana customer ini menjadi PIC
+        $contactId = isset($sessionUser['contact_id']) ? (int) $sessionUser['contact_id'] : null;
+        if ($contactId) {
+            $dsPicIds = $this->getDsPicTicketIds($contactId);
+            if ($dsPicIds->contains($ticket->ticket_id)) {
+                return true;
+            }
+        }
+
+        return strcasecmp((string) $ticket->submitted_by_email, (string) ($sessionUser['email'] ?? '')) === 0;
+    }
+
+    /**
      * Display tickets page (HTML view)
      */
     public function index()
@@ -105,7 +194,10 @@ class TicketController extends Controller
 
         try {
             $service  = new StagingTicketService();
-            $stagings = $service->getByCustomer($user['id']);
+            $stagings = $service->getByCustomer(
+                $user['id'],
+                $this->customerCanViewAll($user) ? null : ($user['email'] ?? null)
+            );
         } catch (\Exception $e) {
             Log::error('pendingPage error', ['error' => $e->getMessage()]);
             $stagings = collect();
@@ -174,7 +266,10 @@ class TicketController extends Controller
 
         try {
             $service  = new StagingTicketService();
-            $stagings = $service->getByCustomer($user['id']);
+            $stagings = $service->getByCustomer(
+                $user['id'],
+                $this->customerCanViewAll($user) ? null : ($user['email'] ?? null)
+            );
 
             $data = $stagings->map(fn ($s) => [
                 'id'               => $s->id,
@@ -265,23 +360,35 @@ class TicketController extends Controller
                     ->orderByRaw('COALESCE(last_message_at, created_at) DESC')
                     ->get();
 
-            // Customer: visibility depends on can_view_all_tickets privilege
+            // Customer: visibility depends on can_view_all_tickets privilege + DS PIC
             } elseif ($sessionUser['role']['id'] == 3) {
                 Log::info('Filtering for customer', ['customer_id' => $sessionUser['id']]);
 
-                $authUser = DB::table('auth_users')
-                    ->where('customer_id', $sessionUser['id'])
-                    ->where('email', $sessionUser['email'])
-                    ->first();
+                $canViewAll = $this->customerCanViewAll($sessionUser);
+                $contactId  = isset($sessionUser['contact_id']) ? (int) $sessionUser['contact_id'] : null;
 
-                $canViewAll = $authUser ? (bool) $authUser->can_view_all_tickets : true;
+                // Cek apakah customer ini terdaftar sebagai PIC di delivery support manapun
+                $dsPicTicketIds = $this->getDsPicTicketIds($contactId);
+                $hasDsPic       = $dsPicTicketIds->isNotEmpty();
 
                 $ticketQuery = Ticket::with(['customer.basicData', 'endCustomer.basicData', 'employee.basicData', 'members.basicData'])
                     ->where('customer_id', $sessionUser['id']);
 
-                if (!$canViewAll) {
+                if ($hasDsPic) {
+                    // DS PIC mode: tampilkan ticket DS yang ia PIC-kan + ticket yang ia submit sendiri
+                    $ticketQuery->where(function ($q) use ($dsPicTicketIds, $sessionUser) {
+                        $q->whereIn('ticket_id', $dsPicTicketIds)
+                          ->orWhere('submitted_by_email', $sessionUser['email']);
+                    });
+                    Log::info('Customer DS PIC filter applied', [
+                        'contact_id'   => $contactId,
+                        'ds_ticket_ids'=> $dsPicTicketIds->toArray(),
+                    ]);
+                } elseif (!$canViewAll) {
+                    // Fallback logika lama: hanya tiket yang ia submit
                     $ticketQuery->where('submitted_by_email', $sessionUser['email']);
                 }
+                // canViewAll && !hasDsPic → tidak ada tambahan filter (lihat semua ticket company)
 
                 $tickets = $ticketQuery->orderByRaw('COALESCE(last_message_at, created_at) DESC')->get();
 
@@ -293,7 +400,8 @@ class TicketController extends Controller
                         $q->where('status', 'unvalidated')->whereNull('ticket_id');
                     });
 
-                if (!$canViewAll) {
+                // Staging tickets: selalu filter by email (DS PIC hanya berlaku untuk ticket nyata)
+                if ($hasDsPic || !$canViewAll) {
                     $stagingQuery->where('submitted_by_email', $sessionUser['email']);
                 }
 
@@ -931,10 +1039,10 @@ class TicketController extends Controller
                 $customerId = $sessionUser['id'];
                 Log::info('My Tickets - Filtering for customer', ['customer_id' => $customerId]);
                 
-                $tickets = Ticket::with(['customer.basicData', 'endCustomer.basicData', 'employee.basicData', 'members.basicData'])
-                    ->where('customer_id', $customerId)
-                    ->orderBy('created_at', 'desc')
-                    ->get();
+                $myTicketsQuery = Ticket::with(['customer.basicData', 'endCustomer.basicData', 'employee.basicData', 'members.basicData'])
+                    ->orderBy('created_at', 'desc');
+                $this->applyCustomerTicketVisibility($myTicketsQuery, $sessionUser);
+                $tickets = $myTicketsQuery->get();
 
             // Employee: cek DSM dan tampilkan tiket yang mereka handle
             } elseif ($sessionUser['role']['id'] == 2) {
@@ -1072,7 +1180,7 @@ class TicketController extends Controller
             ->where('customer_id', $sessionUser['id'])
             ->first();
 
-        if (!$ticket) {
+        if (!$ticket || !$this->customerCanAccessTicket($sessionUser, $ticket)) {
             return redirect()->route('tickets.index')->with('error', 'Ticket not found.');
         }
 
@@ -1292,7 +1400,7 @@ class TicketController extends Controller
                 $ticket->update([
                     'employee_id' => $confirmation->employee_id,
                     'man_days'    => $confirmation->man_days,
-                    'status'      => 'in process',
+                    'status'      => 'inprocess',
                     'start_date'  => now(),
                 ]);
 
@@ -1377,7 +1485,7 @@ class TicketController extends Controller
             $ticket = Ticket::findOrFail($id);
             
             // Customer can only update their own tickets
-            if ($sessionUser['role']['id'] == 3 && $ticket->customer_id != $sessionUser['id']) {
+            if ($sessionUser['role']['id'] == 3 && !$this->customerCanAccessTicket($sessionUser, $ticket)) {
                 return response()->json([
                     'success' => false,
                     'message' => 'You can only update your own tickets'
@@ -1451,7 +1559,7 @@ class TicketController extends Controller
             $ticket = Ticket::findOrFail($id);
 
             // Customer can only view their own ticket history
-            if ($sessionUser['role']['id'] == 3 && $ticket->customer_id != $sessionUser['id']) {
+            if ($sessionUser['role']['id'] == 3 && !$this->customerCanAccessTicket($sessionUser, $ticket)) {
                 return response()->json([
                     'success' => false,
                     'message' => 'You can only view your own ticket history'
@@ -1500,7 +1608,7 @@ class TicketController extends Controller
                 ->findOrFail($id);
 
             // Customer hanya bisa lihat tiket mereka sendiri
-            if ($sessionUser['role']['id'] == 3 && $ticket->customer_id != $sessionUser['id']) {
+            if ($sessionUser['role']['id'] == 3 && !$this->customerCanAccessTicket($sessionUser, $ticket)) {
                 if (request()->expectsJson()) {
                     return response()->json(['success' => false, 'message' => 'Forbidden'], 403);
                 }
@@ -1573,8 +1681,8 @@ class TicketController extends Controller
 
             $ticket = Ticket::findOrFail($id);
 
-            // Customer hanya bisa akses tiket miliknya
-            if ($sessionUser['role']['id'] == 3 && $ticket->customer_id != $sessionUser['id']) {
+            // Customer hanya bisa akses tiket miliknya (Member: hanya tiket sendiri)
+            if ($sessionUser['role']['id'] == 3 && !$this->customerCanAccessTicket($sessionUser, $ticket)) {
                 return response()->json(['success' => false, 'message' => 'Forbidden'], 403);
             }
 
@@ -1825,8 +1933,8 @@ class TicketController extends Controller
 
             $ticket = Ticket::findOrFail($id);
 
-            // Customer hanya bisa reply ke tiket miliknya
-            if ($roleId == 3 && $ticket->customer_id != $sessionUser['id']) {
+            // Customer hanya bisa reply ke tiket miliknya (Member: hanya tiket sendiri)
+            if ($roleId == 3 && !$this->customerCanAccessTicket($sessionUser, $ticket)) {
                 return response()->json(['success' => false, 'message' => 'Forbidden'], 403);
             }
 
@@ -1862,7 +1970,7 @@ class TicketController extends Controller
                 // tag yang dihapus). Override ticket.cc_emails dengan list ini agar reply
                 // berikutnya auto-populate dari state terbaru. Simpan dalam format
                 // [{address,name}] agar konsisten dengan EcoSystem (processInbox & helpdesk reply).
-                $senderSelf  = strtolower((string) (env('MS_SENDER_EMAIL') ?? config('services.microsoft_graph.sender_email', '')));
+                $senderSelf  = strtolower((string) config('services.microsoft_graph.sender_email', ''));
                 $customerSelf = strtolower((string) ($senderEmail ?? ''));
 
                 if ($request->filled('cc_emails') || is_array($rawCc)) {
@@ -1939,6 +2047,11 @@ class TicketController extends Controller
 
                 foreach ($result['attachments'] as $att) {
                     if (!$att['uploaded']) continue;
+                    // Gambar inline sudah ditangani choke point TicketMessage::booted()
+                    // (disimpan ke public disk + baris TicketAttachment file_path).
+                    // Lewati di sini agar tidak ada baris inline ganda; hanya file
+                    // attachment biasa yang perlu baris proxy Graph.
+                    if (!empty($att['is_inline'])) continue;
                     TicketAttachment::create([
                         'ticket_id'           => $ticket->ticket_id,
                         'message_id'          => $ticketMessage->id,
@@ -1986,7 +2099,7 @@ class TicketController extends Controller
 
             try {
                 if (!in_array($ticket->fresh()->status, ['closed', 'cancelled'])) {
-                    $ticket->update(['status' => 'in process']);
+                    $ticket->update(['status' => 'inprocess']);
                 }
             } catch (\Exception $statusEx) {
                 Log::warning('addComment: status update failed (non-blocking)', [
@@ -2022,7 +2135,7 @@ class TicketController extends Controller
         }
 
         $validator = Validator::make($request->all(), [
-            'status'          => 'sometimes|string|in:open,in process,waiting on customer,waiting on 3rd party,waiting to confirmation,hold,cancelled,closed',
+            'status'          => 'sometimes|string|in:open,inprocess,waiting_on_customer,waiting_on_3rd_party,waiting_to_confirmation,hold,cancelled,closed',
             'ticket_priority' => 'sometimes|string|in:Very High,High,Medium,Low',
             'employee_id'     => 'sometimes|nullable|exists:employee,employee_id',
             'man_days'        => 'sometimes|nullable|numeric|min:0|max:9999.99',
@@ -2148,9 +2261,9 @@ class TicketController extends Controller
                 ->where('status', $status)
                 ->orderBy('created_at', 'desc');
 
-            // Customer hanya bisa lihat tiket mereka sendiri
+            // Customer: Admin lihat semua tiket company, Member hanya tiket miliknya
             if ($sessionUser['role']['id'] == 3) {
-                $query->where('customer_id', $sessionUser['id']);
+                $this->applyCustomerTicketVisibility($query, $sessionUser);
             }
             // Admin (role_id = 1) bisa lihat semua
             // Employee dengan DSM juga bisa lihat semua (sudah dicheck di atas)
@@ -2196,19 +2309,19 @@ class TicketController extends Controller
 
             $query = Ticket::query();
 
-            // Customer hanya bisa lihat statistik tiket mereka sendiri
+            // Customer: Admin lihat semua statistik company, Member hanya tiket miliknya
             if ($sessionUser['role']['id'] == 3) {
-                $query->where('customer_id', $sessionUser['id']);
+                $this->applyCustomerTicketVisibility($query, $sessionUser);
             }
             // Admin (role_id = 1) dan Employee dengan DSM bisa lihat semua statistik
 
             $stats = [
                 'total'                   => (clone $query)->count(),
                 'open'                    => (clone $query)->where('status', 'open')->count(),
-                'in_process'              => (clone $query)->where('status', 'in process')->count(),
-                'waiting_on_customer'     => (clone $query)->where('status', 'waiting on customer')->count(),
-                'waiting_on_3rd_party'    => (clone $query)->where('status', 'waiting on 3rd party')->count(),
-                'waiting_to_confirmation' => (clone $query)->where('status', 'waiting to confirmation')->count(),
+                'in_process'              => (clone $query)->where('status', 'inprocess')->count(),
+                'waiting_on_customer'     => (clone $query)->where('status', 'waiting_on_customer')->count(),
+                'waiting_on_3rd_party'    => (clone $query)->where('status', 'waiting_on_3rd_party')->count(),
+                'waiting_to_confirmation' => (clone $query)->where('status', 'waiting_to_confirmation')->count(),
                 'hold'                    => (clone $query)->where('status', 'hold')->count(),
                 'cancelled'               => (clone $query)->where('status', 'cancelled')->count(),
                 'closed'                  => (clone $query)->where('status', 'closed')->count(),
@@ -2442,7 +2555,7 @@ class TicketController extends Controller
         }
 
         $validator = Validator::make($request->all(), [
-            'status' => 'required|string|in:open,in process,waiting on customer,waiting on 3rd party,waiting to confirmation,hold,cancelled,closed',
+            'status' => 'required|string|in:open,inprocess,waiting_on_customer,waiting_on_3rd_party,waiting_to_confirmation,hold,cancelled,closed',
         ]);
 
         if ($validator->fails()) {
@@ -3489,7 +3602,7 @@ class TicketController extends Controller
     private function graphApiGet(string $path, array $query = [], array $headers = []): array
     {
         $token   = $this->graphGetToken();
-        $baseUrl = rtrim(env('GRAPH_BASE_URL', 'https://graph.microsoft.com/v1.0'), '/');
+        $baseUrl = rtrim(config('services.microsoft_graph.base_url', 'https://graph.microsoft.com/v1.0'), '/');
         $http    = Http::withToken($token);
         if (!empty($headers)) {
             $http = $http->withHeaders($headers);
@@ -3519,7 +3632,7 @@ class TicketController extends Controller
         if ($hasBody && !$attNeedsFetch) return;
 
         try {
-            $sender     = env('MS_SENDER_EMAIL');
+            $sender     = config('services.microsoft_graph.sender_email');
             $graphMsg   = null;
             // Minta body dalam HTML supaya inline image tetap jadi <img src="cid:..."> tag,
             // bukan placeholder text `[image.png]` yang tidak bisa di-rewrite via regex.
@@ -3688,13 +3801,13 @@ class TicketController extends Controller
 
     private function graphGetToken(): string
     {
-        $tenantId = env('MS_TENANT_ID');
+        $tenantId = config('services.microsoft_graph.tenant_id');
         $response = Http::asForm()->post(
             "https://login.microsoftonline.com/{$tenantId}/oauth2/v2.0/token",
             [
                 'grant_type'    => 'client_credentials',
-                'client_id'     => env('MS_CLIENT_ID'),
-                'client_secret' => env('MS_CLIENT_SECRET'),
+                'client_id'     => config('services.microsoft_graph.client_id'),
+                'client_secret' => config('services.microsoft_graph.client_secret'),
                 'scope'         => 'https://graph.microsoft.com/.default',
             ]
         );
@@ -3706,8 +3819,8 @@ class TicketController extends Controller
 
     private function graphFetchAttachment(string $graphMsgId, string $attachmentId): array
     {
-        $sender  = env('MS_SENDER_EMAIL');
-        $baseUrl = rtrim(env('GRAPH_BASE_URL', 'https://graph.microsoft.com/v1.0'), '/');
+        $sender  = config('services.microsoft_graph.sender_email');
+        $baseUrl = rtrim(config('services.microsoft_graph.base_url', 'https://graph.microsoft.com/v1.0'), '/');
         $token   = $this->graphGetToken();
 
         $response = Http::withToken($token)->get(
@@ -4266,10 +4379,11 @@ class TicketController extends Controller
         $data        = $this->graphFetchAttachment($graphMsgId, $att['id']);
         $content     = base64_decode($data['contentBytes'] ?? '');
         $contentType = $data['contentType'] ?? $att['contentType'] ?? 'application/octet-stream';
-        $filename    = $data['name'] ?? $att['name'] ?? 'attachment';
+        $filename  = $data['name'] ?? $att['name'] ?? 'attachment';
+        $asciiName = str_replace(['"', '\\', "\r", "\n"], '', preg_replace('/[^\x20-\x7E]/', '_', $filename));
 
         return response($content, 200)
             ->header('Content-Type', $contentType)
-            ->header('Content-Disposition', 'attachment; filename="' . addslashes($filename) . '"');
+            ->header('Content-Disposition', 'attachment; filename="' . $asciiName . '"; filename*=UTF-8\'\'' . rawurlencode($filename));
     }
 }
