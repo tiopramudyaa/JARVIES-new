@@ -26,7 +26,9 @@ class DashboardController extends Controller
         $customerId = $user['id'];
 
         try {
-            $tickets = Ticket::where('customer_id', $customerId)->get();
+            // ->visibleToCustomer(): buang tiket internal EcoSystem & tiket yang di-hide
+            // (tabel `ticket` dipakai bersama EcoSystem — lihat Ticket::scopeVisibleToCustomer).
+            $tickets = Ticket::where('customer_id', $customerId)->visibleToCustomer()->get();
 
             // Hitung per status
             $summary = [
@@ -51,6 +53,7 @@ class DashboardController extends Controller
             // 5 tiket terbaru
             $recentTickets = Ticket::with(['employee.basicData'])
                 ->where('customer_id', $customerId)
+                ->visibleToCustomer()
                 ->orderBy('created_at', 'desc')
                 ->limit(5)
                 ->get()

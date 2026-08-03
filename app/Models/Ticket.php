@@ -44,7 +44,39 @@ class Ticket extends Model
         'wait_close'      => 'decimal:2',
         'last_message_at' => 'datetime',
         'cc_emails'       => 'array',
+        'visible_to_customer' => 'boolean',
     ];
+
+    /**
+     * Batasi query ke tiket yang boleh dilihat customer.
+     *
+     * EcoSystem & JARVIES berbagi tabel `ticket` yang sama, jadi tiket yang
+     * dibuat internal dari EcoSystem (Admin / Helpdesk / External API) ikut
+     * ter-scope ke `customer_id` company dan akan tampil di JARVIES bila tidak
+     * disaring. Dua kolom penandanya di-set dari EcoSystem, JARVIES hanya membaca:
+     *
+     *   visible_to_customer = 0 → tiket internal EcoSystem
+     *   is_hidden           = 1 → di-hide manual lewat menu Hidden Tickets
+     *
+     * WAJIB dipakai di SEMUA query tiket yang hasilnya dikembalikan ke customer
+     * (role 3) — list, detail, statistik, dashboard, dan API mobile.
+     *
+     * Bukan global scope: JARVIES juga melayani role admin/employee yang justru
+     * harus tetap melihat seluruh tiket.
+     */
+    public function scopeVisibleToCustomer($query)
+    {
+        return $query->where('visible_to_customer', 1)->whereNull('is_hidden');
+    }
+
+    /**
+     * Versi per-instance dari scopeVisibleToCustomer() — untuk guard akses satu
+     * tiket yang sudah terlanjur di-fetch (mis. Ticket::findOrFail()).
+     */
+    public function isVisibleToCustomer(): bool
+    {
+        return (bool) $this->visible_to_customer && !$this->is_hidden;
+    }
 
     public function customer()
     {

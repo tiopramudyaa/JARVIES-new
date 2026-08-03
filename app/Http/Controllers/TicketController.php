@@ -111,16 +111,39 @@ class TicketController extends Controller
      * Tiket email dari domain company yang belum terdaftar sebagai contact sudah
      * ter-attribute ke customer_id company yang benar oleh EcoSystem saat intake,
      * sehingga Admin tetap melihatnya lewat filter customer_id.
+     *
+     * Selalu dipasangkan dengan applyCustomerVisibilityGuards() — batas company vs
+     * batas "boleh dilihat customer" sengaja dipisah supaya cabang DS PIC di
+     * getTickets() bisa memakai guard-nya tanpa ikut memakai aturan Member.
      */
     private function applyCustomerTicketVisibility($query, array $sessionUser, string $column = 'submitted_by_email')
     {
         $query->where('customer_id', $sessionUser['id']);
+        $this->applyCustomerVisibilityGuards($query);
 
         if (!$this->customerCanViewAll($sessionUser)) {
             $query->where($column, $sessionUser['email']);
         }
 
         return $query;
+    }
+
+    /**
+     * Guard yang berlaku untuk SEMUA customer, tanpa memandang Admin/Member/DS PIC.
+     *
+     * - `visible_to_customer = 0` → tiket internal yang dibuat dari EcoSystem
+     *   (Admin / Helpdesk / External API). EcoSystem & JARVIES berbagi tabel
+     *   `ticket` yang sama, jadi tiket internal ikut ter-scope ke customer_id
+     *   company dan membingungkan customer bila tidak disaring di sini.
+     * - `is_hidden = 1` → tiket yang disembunyikan manual lewat menu Hidden
+     *   Tickets di EcoSystem.
+     *
+     * Keduanya di-set dari sisi EcoSystem; JARVIES hanya membaca.
+     * Implementasi tunggal ada di Ticket::scopeVisibleToCustomer().
+     */
+    private function applyCustomerVisibilityGuards($query)
+    {
+        return $query->visibleToCustomer();
     }
 
     /**
@@ -154,6 +177,12 @@ class TicketController extends Controller
     private function customerCanAccessTicket(array $sessionUser, Ticket $ticket): bool
     {
         if ($ticket->customer_id != $sessionUser['id']) {
+            return false;
+        }
+
+        // Tiket internal EcoSystem / tiket yang di-hide: tertutup untuk semua
+        // customer, termasuk Admin dan DS PIC. Lihat applyCustomerVisibilityGuards().
+        if (!$ticket->visible_to_customer || $ticket->is_hidden) {
             return false;
         }
 
@@ -373,6 +402,10 @@ class TicketController extends Controller
 
                 $ticketQuery = Ticket::with(['customer.basicData', 'endCustomer.basicData', 'employee.basicData', 'members.basicData'])
                     ->where('customer_id', $sessionUser['id']);
+
+                // Berlaku untuk ketiga cabang di bawah (DS PIC / Member / Admin):
+                // tiket internal EcoSystem & tiket yang di-hide tidak pernah tampil.
+                $this->applyCustomerVisibilityGuards($ticketQuery);
 
                 if ($hasDsPic) {
                     // DS PIC mode: tampilkan ticket DS yang ia PIC-kan + ticket yang ia submit sendiri
@@ -3847,6 +3880,7 @@ class TicketController extends Controller
 
         $ticket = Ticket::where('ticket_id', $id)
             ->where('customer_id', $user['id'])
+            ->visibleToCustomer()
             ->first();
 
         if (!$ticket) {
@@ -3937,6 +3971,7 @@ class TicketController extends Controller
 
         $ticket = Ticket::where('ticket_id', $id)
             ->where('customer_id', $user['id'])
+            ->visibleToCustomer()
             ->first();
 
         if (!$ticket) {

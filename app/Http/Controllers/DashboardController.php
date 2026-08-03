@@ -15,7 +15,10 @@ class DashboardController extends Controller
         $customerId = (int) ($user['id'] ?? 0);
 
         // ── Ticket counts (real data from shared DB) ────────────────────────
+        // ->visibleToCustomer(): buang tiket internal EcoSystem & tiket yang di-hide
+        // (tabel `ticket` dipakai bersama EcoSystem — lihat Ticket::scopeVisibleToCustomer).
         $statusCounts = Ticket::where('customer_id', $customerId)
+            ->visibleToCustomer()
             ->selectRaw("
                 COUNT(*) as total,
                 SUM(CASE WHEN status = 'closed' THEN 1 ELSE 0 END)                    as closed,
@@ -46,6 +49,7 @@ class DashboardController extends Controller
 
         // ── Recent tickets (last 5) ─────────────────────────────────────────
         $recentTickets = Ticket::where('customer_id', $customerId)
+            ->visibleToCustomer()
             ->orderByDesc('created_at')
             ->limit(5)
             ->get(['ticket_id', 'ticket_number', 'description', 'status', 'ticket_priority', 'created_at']);
@@ -53,6 +57,9 @@ class DashboardController extends Controller
         // ── Ticket trend — per day for the last 30 days, by start_date (fallback created_at) ─
         $trendRows = DB::table('ticket')
             ->where('customer_id', $customerId)
+            // Query builder mentah — scope Eloquent tidak berlaku, kondisinya ditulis ulang.
+            ->where('visible_to_customer', 1)
+            ->whereNull('is_hidden')
             ->whereRaw('COALESCE(start_date, created_at) >= ?', [now()->subDays(29)->startOfDay()])
             ->selectRaw('DATE(COALESCE(start_date, created_at)) as day, COUNT(*) as cnt')
             ->groupBy('day')
