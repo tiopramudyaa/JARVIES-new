@@ -58,7 +58,10 @@ class DashboardController extends Controller
         $trendRows = DB::table('ticket')
             ->where('customer_id', $customerId)
             // Query builder mentah — scope Eloquent tidak berlaku, kondisinya ditulis ulang.
-            ->where('visible_to_customer', 1)
+            ->where(function ($q) {
+                $q->whereNull('ticket_type')
+                  ->orWhere('ticket_type', '<>', Ticket::TYPE_INTERNAL);
+            })
             ->whereNull('is_hidden')
             ->whereRaw('COALESCE(start_date, created_at) >= ?', [now()->subDays(29)->startOfDay()])
             ->selectRaw('DATE(COALESCE(start_date, created_at)) as day, COUNT(*) as cnt')

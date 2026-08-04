@@ -131,10 +131,10 @@ class TicketController extends Controller
     /**
      * Guard yang berlaku untuk SEMUA customer, tanpa memandang Admin/Member/DS PIC.
      *
-     * - `visible_to_customer = 0` → tiket internal yang dibuat dari EcoSystem
-     *   (Admin / Helpdesk / External API). EcoSystem & JARVIES berbagi tabel
-     *   `ticket` yang sama, jadi tiket internal ikut ter-scope ke customer_id
-     *   company dan membingungkan customer bila tidak disaring di sini.
+     * - `ticket_type = 'Internal'` → tiket internal Eclectic. EcoSystem & JARVIES
+     *   berbagi tabel `ticket` yang sama, jadi tiket internal ikut ter-scope ke
+     *   customer_id company dan membingungkan customer bila tidak disaring di sini.
+     *   Tiket buatan EcoSystem dengan type LAIN tetap milik customer → terlihat.
      * - `is_hidden = 1` → tiket yang disembunyikan manual lewat menu Hidden
      *   Tickets di EcoSystem.
      *
@@ -180,9 +180,9 @@ class TicketController extends Controller
             return false;
         }
 
-        // Tiket internal EcoSystem / tiket yang di-hide: tertutup untuk semua
-        // customer, termasuk Admin dan DS PIC. Lihat applyCustomerVisibilityGuards().
-        if (!$ticket->visible_to_customer || $ticket->is_hidden) {
+        // Tiket internal / tiket yang di-hide: tertutup untuk semua customer,
+        // termasuk Admin dan DS PIC. Lihat applyCustomerVisibilityGuards().
+        if (!$ticket->isVisibleToCustomer()) {
             return false;
         }
 
@@ -628,6 +628,13 @@ class TicketController extends Controller
                 'attachments.*'   => 'file|max:20480',
                 'for_customer_id' => 'nullable|integer',
             ]);
+
+            // Type "Internal" hanya boleh diset dari EcoSystem — kalau lolos dari sini,
+            // customer justru menyembunyikan tiketnya sendiri (dan EcoSystem menolak
+            // nilainya di validasi staging). Diamkan jadi null, bukan error.
+            if (($validated['ticket_type'] ?? null) === Ticket::TYPE_INTERNAL) {
+                $validated['ticket_type'] = null;
+            }
 
             // Ticket selalu milik parent customer (Sinergi) — end customer hanya informatif
             $isParentCustomer = $user['is_parent_customer'] ?? false;

@@ -44,19 +44,29 @@ class Ticket extends Model
         'wait_close'      => 'decimal:2',
         'last_message_at' => 'datetime',
         'cc_emails'       => 'array',
-        'visible_to_customer' => 'boolean',
     ];
+
+    /**
+     * Ticket type yang murni urusan internal Eclectic — tidak pernah ditampilkan
+     * ke customer. Nilainya dipilih dari EcoSystem (dropdown Ticket Type);
+     * JARVIES hanya membaca. Lihat App\Models\Ticket::TYPE_INTERNAL di EcoSystem.
+     */
+    public const TYPE_INTERNAL = 'Internal';
 
     /**
      * Batasi query ke tiket yang boleh dilihat customer.
      *
-     * EcoSystem & JARVIES berbagi tabel `ticket` yang sama, jadi tiket yang
-     * dibuat internal dari EcoSystem (Admin / Helpdesk / External API) ikut
-     * ter-scope ke `customer_id` company dan akan tampil di JARVIES bila tidak
-     * disaring. Dua kolom penandanya di-set dari EcoSystem, JARVIES hanya membaca:
+     * EcoSystem & JARVIES berbagi tabel `ticket` yang sama, jadi tiket internal
+     * ikut ter-scope ke `customer_id` company dan akan tampil di JARVIES bila
+     * tidak disaring. Dua penandanya di-set dari EcoSystem, JARVIES hanya membaca:
      *
-     *   visible_to_customer = 0 → tiket internal EcoSystem
-     *   is_hidden           = 1 → di-hide manual lewat menu Hidden Tickets
+     *   ticket_type = 'Internal' → tiket internal Eclectic
+     *   is_hidden   = 1          → di-hide manual lewat menu Hidden Tickets
+     *
+     * CATATAN: pembedanya HANYA ticket_type. Tiket yang dibuat dari EcoSystem
+     * dengan type lain (Incident, Change Request, dst.) TETAP milik customer dan
+     * harus terlihat — jangan pakai channel / ada-tidaknya baris staging_tickets
+     * sebagai pembeda.
      *
      * WAJIB dipakai di SEMUA query tiket yang hasilnya dikembalikan ke customer
      * (role 3) — list, detail, statistik, dashboard, dan API mobile.
@@ -66,7 +76,13 @@ class Ticket extends Model
      */
     public function scopeVisibleToCustomer($query)
     {
-        return $query->where('visible_to_customer', 1)->whereNull('is_hidden');
+        // NULL-safe: `ticket_type <> 'Internal'` bernilai NULL (= tidak match)
+        // untuk tiket yang type-nya belum diisi, jadi harus di-OR dengan whereNull.
+        return $query->where(function ($q) {
+                $q->whereNull('ticket_type')
+                  ->orWhere('ticket_type', '<>', self::TYPE_INTERNAL);
+            })
+            ->whereNull('is_hidden');
     }
 
     /**
@@ -75,7 +91,7 @@ class Ticket extends Model
      */
     public function isVisibleToCustomer(): bool
     {
-        return (bool) $this->visible_to_customer && !$this->is_hidden;
+        return $this->ticket_type !== self::TYPE_INTERNAL && !$this->is_hidden;
     }
 
     public function customer()
