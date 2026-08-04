@@ -33,8 +33,10 @@ class TicketMessageController extends Controller
             // Check access based on role
             $roleId = $sessionUser['role']['id'];
 
-            // Customer can only view their own ticket messages
-            if ($roleId == 3 && $ticket->customer_id != $sessionUser['id']) {
+            // Customer can only view their own ticket messages.
+            // isVisibleToCustomer(): tiket internal EcoSystem & tiket yang di-hide
+            // tertutup untuk customer (lihat Ticket::scopeVisibleToCustomer).
+            if ($roleId == 3 && ($ticket->customer_id != $sessionUser['id'] || !$ticket->isVisibleToCustomer())) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Unauthorized to view this ticket'
@@ -116,8 +118,8 @@ class TicketMessageController extends Controller
             $ticket = Ticket::findOrFail($ticketId);
             $roleId = $sessionUser['role']['id'];
 
-            // Customer can only reply to their own tickets
-            if ($roleId == 3 && $ticket->customer_id != $sessionUser['id']) {
+            // Customer can only reply to their own tickets (dan bukan tiket internal EcoSystem)
+            if ($roleId == 3 && ($ticket->customer_id != $sessionUser['id'] || !$ticket->isVisibleToCustomer())) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Unauthorized to reply to this ticket'
@@ -269,7 +271,7 @@ class TicketMessageController extends Controller
             $roleId = $sessionUser['role']['id'];
 
             // Customer can only mark their own ticket messages as read
-            if ($roleId == 3 && $ticket->customer_id != $sessionUser['id']) {
+            if ($roleId == 3 && ($ticket->customer_id != $sessionUser['id'] || !$ticket->isVisibleToCustomer())) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Unauthorized'

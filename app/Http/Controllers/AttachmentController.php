@@ -31,7 +31,9 @@ class AttachmentController extends Controller
         // Customer hanya bisa akses attachment dari tiket miliknya
         if (($sessionUser['role']['id'] ?? 0) == 3) {
             $ticket = Ticket::find($attachment->ticket_id);
-            if (!$ticket || $ticket->customer_id != $sessionUser['id']) {
+            // isVisibleToCustomer(): tiket internal EcoSystem & tiket yang di-hide
+            // tertutup untuk customer (lihat Ticket::scopeVisibleToCustomer).
+            if (!$ticket || $ticket->customer_id != $sessionUser['id'] || !$ticket->isVisibleToCustomer()) {
                 abort(403, 'Forbidden');
             }
         }

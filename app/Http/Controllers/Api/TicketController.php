@@ -34,8 +34,11 @@ class TicketController extends Controller
         $user = $request->attributes->get('api_user');
 
         try {
+            // ->visibleToCustomer(): buang tiket internal EcoSystem & tiket yang di-hide
+            // (tabel `ticket` dipakai bersama EcoSystem — lihat Ticket::scopeVisibleToCustomer).
             $query = Ticket::with(['employee.basicData', 'members.basicData'])
                 ->where('customer_id', $user['id'])
+                ->visibleToCustomer()
                 ->orderBy('created_at', 'desc');
 
             if ($request->filled('status')) {
@@ -65,6 +68,7 @@ class TicketController extends Controller
             $ticket = Ticket::with(['employee.basicData', 'members.basicData'])
                 ->where('ticket_id', $id)
                 ->where('customer_id', $user['id'])
+                ->visibleToCustomer()
                 ->first();
 
             if (!$ticket) {
@@ -404,6 +408,7 @@ class TicketController extends Controller
         try {
             $ticket = Ticket::where('ticket_id', $id)
                 ->where('customer_id', $user['id'])
+                ->visibleToCustomer()
                 ->first();
 
             if (!$ticket) {
@@ -472,6 +477,7 @@ class TicketController extends Controller
         try {
             $ticket = Ticket::where('ticket_id', $id)
                 ->where('customer_id', $user['id'])
+                ->visibleToCustomer()
                 ->first();
 
             if (!$ticket) {

@@ -46,6 +46,54 @@ class Ticket extends Model
         'cc_emails'       => 'array',
     ];
 
+    /**
+     * Ticket type yang murni urusan internal Eclectic — tidak pernah ditampilkan
+     * ke customer. Nilainya dipilih dari EcoSystem (dropdown Ticket Type);
+     * JARVIES hanya membaca. Lihat App\Models\Ticket::TYPE_INTERNAL di EcoSystem.
+     */
+    public const TYPE_INTERNAL = 'Internal';
+
+    /**
+     * Batasi query ke tiket yang boleh dilihat customer.
+     *
+     * EcoSystem & JARVIES berbagi tabel `ticket` yang sama, jadi tiket internal
+     * ikut ter-scope ke `customer_id` company dan akan tampil di JARVIES bila
+     * tidak disaring. Dua penandanya di-set dari EcoSystem, JARVIES hanya membaca:
+     *
+     *   ticket_type = 'Internal' → tiket internal Eclectic
+     *   is_hidden   = 1          → di-hide manual lewat menu Hidden Tickets
+     *
+     * CATATAN: pembedanya HANYA ticket_type. Tiket yang dibuat dari EcoSystem
+     * dengan type lain (Incident, Change Request, dst.) TETAP milik customer dan
+     * harus terlihat — jangan pakai channel / ada-tidaknya baris staging_tickets
+     * sebagai pembeda.
+     *
+     * WAJIB dipakai di SEMUA query tiket yang hasilnya dikembalikan ke customer
+     * (role 3) — list, detail, statistik, dashboard, dan API mobile.
+     *
+     * Bukan global scope: JARVIES juga melayani role admin/employee yang justru
+     * harus tetap melihat seluruh tiket.
+     */
+    public function scopeVisibleToCustomer($query)
+    {
+        // NULL-safe: `ticket_type <> 'Internal'` bernilai NULL (= tidak match)
+        // untuk tiket yang type-nya belum diisi, jadi harus di-OR dengan whereNull.
+        return $query->where(function ($q) {
+                $q->whereNull('ticket_type')
+                  ->orWhere('ticket_type', '<>', self::TYPE_INTERNAL);
+            })
+            ->whereNull('is_hidden');
+    }
+
+    /**
+     * Versi per-instance dari scopeVisibleToCustomer() — untuk guard akses satu
+     * tiket yang sudah terlanjur di-fetch (mis. Ticket::findOrFail()).
+     */
+    public function isVisibleToCustomer(): bool
+    {
+        return $this->ticket_type !== self::TYPE_INTERNAL && !$this->is_hidden;
+    }
+
     public function customer()
     {
         return $this->belongsTo(Customer::class, 'customer_id', 'customer_id');

@@ -111,16 +111,39 @@ class TicketController extends Controller
      * Tiket email dari domain company yang belum terdaftar sebagai contact sudah
      * ter-attribute ke customer_id company yang benar oleh EcoSystem saat intake,
      * sehingga Admin tetap melihatnya lewat filter customer_id.
+     *
+     * Selalu dipasangkan dengan applyCustomerVisibilityGuards() — batas company vs
+     * batas "boleh dilihat customer" sengaja dipisah supaya cabang DS PIC di
+     * getTickets() bisa memakai guard-nya tanpa ikut memakai aturan Member.
      */
     private function applyCustomerTicketVisibility($query, array $sessionUser, string $column = 'submitted_by_email')
     {
         $query->where('customer_id', $sessionUser['id']);
+        $this->applyCustomerVisibilityGuards($query);
 
         if (!$this->customerCanViewAll($sessionUser)) {
             $query->where($column, $sessionUser['email']);
         }
 
         return $query;
+    }
+
+    /**
+     * Guard yang berlaku untuk SEMUA customer, tanpa memandang Admin/Member/DS PIC.
+     *
+     * - `ticket_type = 'Internal'` → tiket internal Eclectic. EcoSystem & JARVIES
+     *   berbagi tabel `ticket` yang sama, jadi tiket internal ikut ter-scope ke
+     *   customer_id company dan membingungkan customer bila tidak disaring di sini.
+     *   Tiket buatan EcoSystem dengan type LAIN tetap milik customer → terlihat.
+     * - `is_hidden = 1` → tiket yang disembunyikan manual lewat menu Hidden
+     *   Tickets di EcoSystem.
+     *
+     * Keduanya di-set dari sisi EcoSystem; JARVIES hanya membaca.
+     * Implementasi tunggal ada di Ticket::scopeVisibleToCustomer().
+     */
+    private function applyCustomerVisibilityGuards($query)
+    {
+        return $query->visibleToCustomer();
     }
 
     /**
@@ -170,6 +193,12 @@ class TicketController extends Controller
     private function customerCanAccessTicket(array $sessionUser, Ticket $ticket): bool
     {
         if ($ticket->customer_id != $sessionUser['id']) {
+            return false;
+        }
+
+        // Tiket internal / tiket yang di-hide: tertutup untuk semua customer,
+        // termasuk Admin dan DS PIC. Lihat applyCustomerVisibilityGuards().
+        if (!$ticket->isVisibleToCustomer()) {
             return false;
         }
 
@@ -400,6 +429,10 @@ class TicketController extends Controller
                 $ticketQuery = Ticket::with(['customer.basicData', 'endCustomer.basicData', 'employee.basicData', 'members.basicData'])
                     ->where('customer_id', $sessionUser['id']);
 
+                // Berlaku untuk ketiga cabang di bawah (DS PIC / Member / Admin):
+                // tiket internal EcoSystem & tiket yang di-hide tidak pernah tampil.
+                $this->applyCustomerVisibilityGuards($ticketQuery);
+
                 if ($isDsPic) {
                     // DS PIC mode: "All Tickets" dibatasi ke ticket DS yang ia PIC-kan (bisa kosong
                     // kalau DS belum ada ticket) + ticket yang ia submit sendiri untuk "My Tickets".
@@ -439,6 +472,7 @@ class TicketController extends Controller
                     'customer_id'                => $s->customer_id,
                     'employee_id'                => null,
                     'description'                => $s->description,
+                    'delivery_name'              => null,
                     'ticket_priority'            => $s->ticket_priority,
                     'ticket_type'                => null,
                     'status'                     => 'pending',
@@ -492,8 +526,16 @@ class TicketController extends Controller
                 ->get()
                 ->keyBy('ticket_id');
 
+            // Bulk-load delivery support name per ticket (via delivery_support_activities)
+            $deliveryMap = DB::table('delivery_support_activities')
+                ->join('delivery_support', 'delivery_support.id', '=', 'delivery_support_activities.delivery_support_id')
+                ->whereIn('delivery_support_activities.ticket_id', $tickets->pluck('ticket_id'))
+                ->select('delivery_support_activities.ticket_id', 'delivery_support.name')
+                ->get()
+                ->keyBy('ticket_id');
+
             // ✅ Transform data untuk frontend
-            $ticketsData = $tickets->map(function($ticket) use ($unreadTicketIds, $approvedMandaysMap, $dsPicTicketIds) {
+            $ticketsData = $tickets->map(function($ticket) use ($unreadTicketIds, $approvedMandaysMap, $dsPicTicketIds, $deliveryMap) {
                 // ✅ Hitung pending confirmations untuk admin
                 $pendingCount = DB::table('ticket_confirmation')
                     ->where('ticket_id', $ticket->ticket_id)
@@ -527,6 +569,7 @@ class TicketController extends Controller
                     ] : null,
                     'end_customer_id'   => $ticket->end_customer_id,
                     'end_customer_name' => $ticket->endCustomer?->basicData?->name_1,
+                    'delivery_name'     => $deliveryMap[$ticket->ticket_id]->name ?? null,
                     'employee' => $ticket->employee ? [
                         'employee_id' => $ticket->employee->employee_id,
                         'employee_name' => $ticket->employee->basicData->first_name ?? 'Unknown',
@@ -611,6 +654,13 @@ class TicketController extends Controller
                 'attachments.*'   => 'file|max:20480',
                 'for_customer_id' => 'nullable|integer',
             ]);
+
+            // Type "Internal" hanya boleh diset dari EcoSystem — kalau lolos dari sini,
+            // customer justru menyembunyikan tiketnya sendiri (dan EcoSystem menolak
+            // nilainya di validasi staging). Diamkan jadi null, bukan error.
+            if (($validated['ticket_type'] ?? null) === Ticket::TYPE_INTERNAL) {
+                $validated['ticket_type'] = null;
+            }
 
             // Ticket selalu milik parent customer (Sinergi) — end customer hanya informatif
             $isParentCustomer = $user['is_parent_customer'] ?? false;
@@ -3863,6 +3913,7 @@ class TicketController extends Controller
 
         $ticket = Ticket::where('ticket_id', $id)
             ->where('customer_id', $user['id'])
+            ->visibleToCustomer()
             ->first();
 
         if (!$ticket) {
@@ -3953,6 +4004,7 @@ class TicketController extends Controller
 
         $ticket = Ticket::where('ticket_id', $id)
             ->where('customer_id', $user['id'])
+            ->visibleToCustomer()
             ->first();
 
         if (!$ticket) {
