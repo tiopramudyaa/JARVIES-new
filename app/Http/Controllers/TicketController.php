@@ -147,6 +147,22 @@ class TicketController extends Controller
     }
 
     /**
+     * Apakah contact ini terdaftar sebagai PIC di delivery support manapun.
+     * Berbeda dari getDsPicTicketIds(): ini true begitu contact terdaftar,
+     * meskipun DS-nya belum punya ticket sama sekali (dsPicTicketIds masih kosong).
+     */
+    private function isDsPic(?int $contactId): bool
+    {
+        if (!$contactId) {
+            return false;
+        }
+
+        return DB::table('delivery_support_customer_pics')
+            ->where('contact_id', $contactId)
+            ->exists();
+    }
+
+    /**
      * Apakah customer boleh mengakses satu tiket spesifik (detail / reply / mandays).
      * Admin: semua tiket company. Member: hanya tiket yang ia submit.
      * DS PIC: boleh akses ticket yang terhubung ke DS di mana mereka terdaftar sebagai PIC.
@@ -157,17 +173,17 @@ class TicketController extends Controller
             return false;
         }
 
-        if ($this->customerCanViewAll($sessionUser)) {
+        $contactId = isset($sessionUser['contact_id']) ? (int) $sessionUser['contact_id'] : null;
+
+        // Bukan DS PIC di manapun → akses semua ticket company (selaras dengan getTickets()).
+        if (!$this->isDsPic($contactId)) {
             return true;
         }
 
-        // Cek apakah ticket ini terhubung ke DS di mana customer ini menjadi PIC
-        $contactId = isset($sessionUser['contact_id']) ? (int) $sessionUser['contact_id'] : null;
-        if ($contactId) {
-            $dsPicIds = $this->getDsPicTicketIds($contactId);
-            if ($dsPicIds->contains($ticket->ticket_id)) {
-                return true;
-            }
+        // DS PIC: dibatasi ke ticket yang terhubung ke DS-nya, atau yang ia submit sendiri.
+        $dsPicIds = $this->getDsPicTicketIds($contactId);
+        if ($dsPicIds->contains($ticket->ticket_id)) {
+            return true;
         }
 
         return strcasecmp((string) $ticket->submitted_by_email, (string) ($sessionUser['email'] ?? '')) === 0;
@@ -178,7 +194,15 @@ class TicketController extends Controller
      */
     public function index()
     {
-        return view('tickets.index');
+        $sessionUser = session('user');
+        $isDsPic     = false;
+
+        if ($sessionUser && ($sessionUser['role']['id'] ?? null) == 3) {
+            $contactId = isset($sessionUser['contact_id']) ? (int) $sessionUser['contact_id'] : null;
+            $isDsPic   = $this->isDsPic($contactId);
+        }
+
+        return view('tickets.index', compact('isDsPic'));
     }
 
     /**
@@ -333,6 +357,9 @@ class TicketController extends Controller
                 'role_id' => $sessionUser['role']['id']
             ]);
 
+            // Ticket IDs yang terhubung ke DS di mana customer ini menjadi PIC (kosong untuk role non-customer).
+            $dsPicTicketIds = collect();
+
             // Admin: bisa lihat semua ticket tanpa pembatasan
             if ($sessionUser['role']['id'] == 1) {
                 Log::info('Admin viewing all tickets');
@@ -360,22 +387,22 @@ class TicketController extends Controller
                     ->orderByRaw('COALESCE(last_message_at, created_at) DESC')
                     ->get();
 
-            // Customer: visibility depends on can_view_all_tickets privilege + DS PIC
+            // Customer: visibility depends on DS PIC registration (bukan lagi can_view_all_tickets)
             } elseif ($sessionUser['role']['id'] == 3) {
                 Log::info('Filtering for customer', ['customer_id' => $sessionUser['id']]);
 
-                $canViewAll = $this->customerCanViewAll($sessionUser);
-                $contactId  = isset($sessionUser['contact_id']) ? (int) $sessionUser['contact_id'] : null;
+                $contactId = isset($sessionUser['contact_id']) ? (int) $sessionUser['contact_id'] : null;
 
-                // Cek apakah customer ini terdaftar sebagai PIC di delivery support manapun
-                $dsPicTicketIds = $this->getDsPicTicketIds($contactId);
-                $hasDsPic       = $dsPicTicketIds->isNotEmpty();
+                // Registrasi PIC menentukan scope, terlepas apakah DS-nya sudah punya ticket atau belum.
+                $isDsPic        = $this->isDsPic($contactId);
+                $dsPicTicketIds = $isDsPic ? $this->getDsPicTicketIds($contactId) : collect();
 
                 $ticketQuery = Ticket::with(['customer.basicData', 'endCustomer.basicData', 'employee.basicData', 'members.basicData'])
                     ->where('customer_id', $sessionUser['id']);
 
-                if ($hasDsPic) {
-                    // DS PIC mode: tampilkan ticket DS yang ia PIC-kan + ticket yang ia submit sendiri
+                if ($isDsPic) {
+                    // DS PIC mode: "All Tickets" dibatasi ke ticket DS yang ia PIC-kan (bisa kosong
+                    // kalau DS belum ada ticket) + ticket yang ia submit sendiri untuk "My Tickets".
                     $ticketQuery->where(function ($q) use ($dsPicTicketIds, $sessionUser) {
                         $q->whereIn('ticket_id', $dsPicTicketIds)
                           ->orWhere('submitted_by_email', $sessionUser['email']);
@@ -384,11 +411,8 @@ class TicketController extends Controller
                         'contact_id'   => $contactId,
                         'ds_ticket_ids'=> $dsPicTicketIds->toArray(),
                     ]);
-                } elseif (!$canViewAll) {
-                    // Fallback logika lama: hanya tiket yang ia submit
-                    $ticketQuery->where('submitted_by_email', $sessionUser['email']);
                 }
-                // canViewAll && !hasDsPic → tidak ada tambahan filter (lihat semua ticket company)
+                // Bukan DS PIC di manapun → tidak ada filter tambahan, tampilkan semua ticket company.
 
                 $tickets = $ticketQuery->orderByRaw('COALESCE(last_message_at, created_at) DESC')->get();
 
@@ -400,8 +424,8 @@ class TicketController extends Controller
                         $q->where('status', 'unvalidated')->whereNull('ticket_id');
                     });
 
-                // Staging tickets: selalu filter by email (DS PIC hanya berlaku untuk ticket nyata)
-                if ($hasDsPic || !$canViewAll) {
+                // Staging tickets: selalu filter by email untuk DS PIC (DS PIC hanya berlaku untuk ticket nyata)
+                if ($isDsPic) {
                     $stagingQuery->where('submitted_by_email', $sessionUser['email']);
                 }
 
@@ -434,6 +458,7 @@ class TicketController extends Controller
                     'channel'                    => $s->channel ?? 'web',
                     'submitted_by_email'         => $s->submitted_by_email,
                     'submitted_by_name'          => $s->sender_name,
+                    'is_ds_linked'               => false,
                     'created_at'                 => $s->created_at?->toIso8601String(),
                     'updated_at'                 => $s->updated_at?->toIso8601String(),
                 ]);
@@ -468,7 +493,7 @@ class TicketController extends Controller
                 ->keyBy('ticket_id');
 
             // ✅ Transform data untuk frontend
-            $ticketsData = $tickets->map(function($ticket) use ($unreadTicketIds, $approvedMandaysMap) {
+            $ticketsData = $tickets->map(function($ticket) use ($unreadTicketIds, $approvedMandaysMap, $dsPicTicketIds) {
                 // ✅ Hitung pending confirmations untuk admin
                 $pendingCount = DB::table('ticket_confirmation')
                     ->where('ticket_id', $ticket->ticket_id)
@@ -523,6 +548,7 @@ class TicketController extends Controller
                     'channel'            => $ticket->channel,
                     'submitted_by_email' => $ticket->submitted_by_email,
                     'submitted_by_name'  => $ticket->submitted_by_name,
+                    'is_ds_linked'       => $dsPicTicketIds->contains($ticket->ticket_id),
                     'has_unread'         => isset($unreadTicketIds[$ticket->ticket_id]),
                     'approved_mandays'   => isset($approvedMandaysMap[$ticket->ticket_id])
                         ? (float) $approvedMandaysMap[$ticket->ticket_id]->total_mandays
