@@ -407,7 +407,16 @@ class TicketController extends Controller
                 // tiket internal EcoSystem & tiket yang di-hide tidak pernah tampil.
                 $this->applyCustomerVisibilityGuards($ticketQuery);
 
-                if ($hasDsPic) {
+                // Status DS PIC hanya MENAMBAH akses, tidak pernah mempersempit.
+                // Admin (can_view_all_tickets = 1) tetap melihat seluruh tiket company
+                // walaupun ia juga terdaftar sebagai Customer PIC di sebuah Delivery
+                // Support — sebelumnya cabang DS PIC dicek lebih dulu sehingga daftar
+                // Admin menyusut jadi "tiket DS-nya + tiket yang ia submit", dan tiket
+                // company lain (mis. yang disubmit rekannya atau hasil import dengan
+                // submitted_by_email NULL) menghilang tanpa jejak.
+                if ($canViewAll) {
+                    // Tidak ada tambahan filter — lihat semua ticket company.
+                } elseif ($hasDsPic) {
                     // DS PIC mode: tampilkan ticket DS yang ia PIC-kan + ticket yang ia submit sendiri
                     $ticketQuery->where(function ($q) use ($dsPicTicketIds, $sessionUser) {
                         $q->whereIn('ticket_id', $dsPicTicketIds)
@@ -417,11 +426,10 @@ class TicketController extends Controller
                         'contact_id'   => $contactId,
                         'ds_ticket_ids'=> $dsPicTicketIds->toArray(),
                     ]);
-                } elseif (!$canViewAll) {
+                } else {
                     // Fallback logika lama: hanya tiket yang ia submit
                     $ticketQuery->where('submitted_by_email', $sessionUser['email']);
                 }
-                // canViewAll && !hasDsPic → tidak ada tambahan filter (lihat semua ticket company)
 
                 $tickets = $ticketQuery->orderByRaw('COALESCE(last_message_at, created_at) DESC')->get();
 
@@ -433,8 +441,9 @@ class TicketController extends Controller
                         $q->where('status', 'unvalidated')->whereNull('ticket_id');
                     });
 
-                // Staging tickets: selalu filter by email (DS PIC hanya berlaku untuk ticket nyata)
-                if ($hasDsPic || !$canViewAll) {
+                // Staging tickets: Member difilter by email; DS PIC tidak berlaku di sini
+                // (hanya untuk ticket nyata) dan juga tidak boleh mempersempit Admin.
+                if (!$canViewAll) {
                     $stagingQuery->where('submitted_by_email', $sessionUser['email']);
                 }
 
