@@ -31,6 +31,8 @@
     $userId          = session('user.id', 0);
     $isAdmin         = $userRole === 1;
     $isCustomerAdmin = $userRole === 3 && session('user.can_view_all_tickets', false);
+    $isDsPic         = $isDsPic ?? false;
+    $showScopeToggle = $isCustomerAdmin || $isDsPic;
     $userEmail       = session('user.email', '');
 
 @endphp
@@ -87,8 +89,8 @@
 {{-- Pagination --}}
 <div class="flex items-center justify-between mb-4">
     <div class="flex items-center gap-4">
-        @if($isCustomerAdmin)
-        {{-- Scope toggle: My Tickets / All Tickets (customer admin only) --}}
+        @if($showScopeToggle)
+        {{-- Scope toggle: My Tickets / All Tickets (customer admin or DS PIC) --}}
         <div class="inline-flex rounded-lg border border-gray-200 bg-gray-100 p-0.5">
             <button type="button" id="scopeBtnMine" onclick="setTicketScope('mine')"
                     class="px-3 py-1.5 text-xs font-semibold rounded-md transition-all">My Tickets</button>
@@ -350,7 +352,7 @@
 let allTickets      = [];
 let filteredTickets = [];
 let currentFilter   = 'all';
-let ticketScope     = 'all';    // 'mine' | 'all'  (only relevant for customer admin)
+let ticketScope     = 'all';    // 'mine' | 'all'  (relevant for customer admin or DS PIC)
 let currentPage     = 1;
 let itemsPerPage    = 20;
 let totalItems      = 0;
@@ -364,6 +366,7 @@ let openPanel   = null;
 const FETCH_URL         = '{{ route("tickets.ajax.fetch") }}';
 const CSRF_TOKEN        = '{{ csrf_token() }}';
 const IS_CUSTOMER_ADMIN = {{ $isCustomerAdmin ? 'true' : 'false' }};
+const IS_DS_PIC         = {{ $isDsPic ? 'true' : 'false' }};
 const USER_EMAIL        = '{{ $userEmail }}';
 
 // ==================== INIT ====================
@@ -555,10 +558,22 @@ function nextPage()      { if (currentPage < totalPages) { currentPage++; render
 
 // ==================== SCOPE (My / All) ====================
 function getScopedTickets() {
-    if (!IS_CUSTOMER_ADMIN || ticketScope === 'all') return allTickets;
-    return allTickets.filter(t =>
-        (t.submitted_by_email || '').toLowerCase() === USER_EMAIL.toLowerCase()
-    );
+    if (ticketScope === 'mine') {
+        // "My Tickets": selalu ticket yang ia submit sendiri, baik admin maupun DS PIC.
+        return allTickets.filter(t =>
+            (t.submitted_by_email || '').toLowerCase() === USER_EMAIL.toLowerCase()
+        );
+    }
+
+    // ticketScope === 'all'
+    if (IS_DS_PIC) {
+        // DS PIC: "All Tickets" dibatasi ke ticket yang terhubung ke DS-nya saja
+        // (bisa kosong kalau DS belum ada ticket) — tidak ikut ticket yang ia submit
+        // sendiri di luar DS itu, karena itu sudah masuk tab "My Tickets".
+        return allTickets.filter(t => t.is_ds_linked);
+    }
+
+    return allTickets;
 }
 
 function setTicketScope(scope) {
