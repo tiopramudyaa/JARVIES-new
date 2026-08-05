@@ -105,25 +105,53 @@ class TicketController extends Controller
     }
 
     /**
-     * Terapkan filter visibility tiket untuk customer ke query Eloquent/Builder.
-     * - customer_id WAJIB cocok (batas company).
-     * - Member dibatasi ke tiket yang ia submit sendiri (submitted_by_email).
+     * ATURAN TUNGGAL scope tiket customer (role 3). Dipakai SEMUA jalur baca —
+     * getTickets(), myTickets(), getByStatus(), statistics() — dan versi
+     * per-instance-nya ada di customerCanAccessTicket(). Jangan tulis ulang
+     * aturannya di tempat lain: pernah ada tiga versi berbeda hidup berdampingan
+     * di controller ini sehingga daftar tiket & halaman detail saling bertentangan.
+     *
+     *   Admin (can_view_all_tickets = 1) → seluruh tiket company, tanpa filter tambahan.
+     *       MENANG atas DS PIC: admin yang kebetulan juga terdaftar sebagai Customer
+     *       PIC tetap all-access. EcoSystem sendiri melarang contact admin dijadikan
+     *       PIC, jadi ini menjaga kasus legacy/promosi yang terlanjur ada.
+     *   DS PIC (Member yang terdaftar di delivery_support_customer_pics)
+     *       → tiket DS yang ia PIC-kan + tiket yang ia submit sendiri.
+     *   Member → hanya tiket yang ia submit sendiri.
+     */
+    private function applyCustomerScope($query, array $sessionUser)
+    {
+        if ($this->customerCanViewAll($sessionUser)) {
+            return $query;
+        }
+
+        $email     = $sessionUser['email'] ?? '';
+        $contactId = isset($sessionUser['contact_id']) ? (int) $sessionUser['contact_id'] : null;
+
+        if ($this->isDsPic($contactId)) {
+            $dsPicTicketIds = $this->getDsPicTicketIds($contactId);
+
+            return $query->where(function ($q) use ($dsPicTicketIds, $email) {
+                $q->whereIn('ticket_id', $dsPicTicketIds)
+                  ->orWhere('submitted_by_email', $email);
+            });
+        }
+
+        return $query->where('submitted_by_email', $email);
+    }
+
+    /**
+     * Terapkan filter visibility tiket untuk customer ke query Eloquent/Builder:
+     * batas company (customer_id) + guard internal/hidden + aturan scope.
      * Tiket email dari domain company yang belum terdaftar sebagai contact sudah
      * ter-attribute ke customer_id company yang benar oleh EcoSystem saat intake,
      * sehingga Admin tetap melihatnya lewat filter customer_id.
-     *
-     * Selalu dipasangkan dengan applyCustomerVisibilityGuards() — batas company vs
-     * batas "boleh dilihat customer" sengaja dipisah supaya cabang DS PIC di
-     * getTickets() bisa memakai guard-nya tanpa ikut memakai aturan Member.
      */
-    private function applyCustomerTicketVisibility($query, array $sessionUser, string $column = 'submitted_by_email')
+    private function applyCustomerTicketVisibility($query, array $sessionUser)
     {
         $query->where('customer_id', $sessionUser['id']);
         $this->applyCustomerVisibilityGuards($query);
-
-        if (!$this->customerCanViewAll($sessionUser)) {
-            $query->where($column, $sessionUser['email']);
-        }
+        $this->applyCustomerScope($query, $sessionUser);
 
         return $query;
     }
@@ -187,8 +215,8 @@ class TicketController extends Controller
 
     /**
      * Apakah customer boleh mengakses satu tiket spesifik (detail / reply / mandays).
-     * Admin: semua tiket company. Member: hanya tiket yang ia submit.
-     * DS PIC: boleh akses ticket yang terhubung ke DS di mana mereka terdaftar sebagai PIC.
+     * Versi per-instance dari applyCustomerScope() — urutan cabangnya WAJIB sama,
+     * kalau tidak, tiket bisa tampil di daftar tapi 403 saat dibuka (atau sebaliknya).
      */
     private function customerCanAccessTicket(array $sessionUser, Ticket $ticket): bool
     {
@@ -202,19 +230,20 @@ class TicketController extends Controller
             return false;
         }
 
+        // Admin: seluruh tiket company. Menang atas DS PIC, sama seperti di scope query.
+        if ($this->customerCanViewAll($sessionUser)) {
+            return true;
+        }
+
         $contactId = isset($sessionUser['contact_id']) ? (int) $sessionUser['contact_id'] : null;
 
-        // Bukan DS PIC di manapun → akses semua ticket company (selaras dengan getTickets()).
-        if (!$this->isDsPic($contactId)) {
+        // DS PIC: tiket yang terhubung ke DS-nya — di luar itu jatuh ke aturan Member.
+        if ($this->isDsPic($contactId)
+            && $this->getDsPicTicketIds($contactId)->contains($ticket->ticket_id)) {
             return true;
         }
 
-        // DS PIC: dibatasi ke ticket yang terhubung ke DS-nya, atau yang ia submit sendiri.
-        $dsPicIds = $this->getDsPicTicketIds($contactId);
-        if ($dsPicIds->contains($ticket->ticket_id)) {
-            return true;
-        }
-
+        // Member: hanya tiket yang ia submit sendiri.
         return strcasecmp((string) $ticket->submitted_by_email, (string) ($sessionUser['email'] ?? '')) === 0;
     }
 
@@ -226,7 +255,12 @@ class TicketController extends Controller
         $sessionUser = session('user');
         $isDsPic     = false;
 
-        if ($sessionUser && ($sessionUser['role']['id'] ?? null) == 3) {
+        // Admin tidak pernah masuk mode DS PIC: tab "All Tickets" di frontend
+        // menyaring ke `is_ds_linked` saja, dan itu akan mempersempit Admin yang
+        // kebetulan juga terdaftar sebagai Customer PIC. Selaras applyCustomerScope().
+        if ($sessionUser
+            && ($sessionUser['role']['id'] ?? null) == 3
+            && !$this->customerCanViewAll($sessionUser)) {
             $contactId = isset($sessionUser['contact_id']) ? (int) $sessionUser['contact_id'] : null;
             $isDsPic   = $this->isDsPic($contactId);
         }
@@ -423,40 +457,28 @@ class TicketController extends Controller
                 $canViewAll = $this->customerCanViewAll($sessionUser);
                 $contactId  = isset($sessionUser['contact_id']) ? (int) $sessionUser['contact_id'] : null;
 
-                // Registrasi PIC menentukan scope, terlepas apakah DS-nya sudah punya ticket atau belum.
-                $isDsPic        = $this->isDsPic($contactId);
-                $dsPicTicketIds = $isDsPic ? $this->getDsPicTicketIds($contactId) : collect();
+                // Dipakai untuk penanda `is_ds_linked` di payload (toggle My/All Tickets
+                // di UI) — pembatasan query-nya sendiri ada di applyCustomerScope().
+                $dsPicTicketIds = $this->isDsPic($contactId)
+                    ? $this->getDsPicTicketIds($contactId)
+                    : collect();
 
                 $ticketQuery = Ticket::with(['customer.basicData', 'endCustomer.basicData', 'employee.basicData', 'members.basicData'])
                     ->where('customer_id', $sessionUser['id']);
 
-                // Berlaku untuk ketiga cabang di bawah (DS PIC / Member / Admin):
-                // tiket internal EcoSystem & tiket yang di-hide tidak pernah tampil.
+                // Tiket internal EcoSystem & tiket yang di-hide tidak pernah tampil,
+                // untuk Admin, DS PIC, maupun Member.
                 $this->applyCustomerVisibilityGuards($ticketQuery);
 
-                // Status DS PIC hanya MENAMBAH akses, tidak pernah mempersempit.
-                // Admin (can_view_all_tickets = 1) tetap melihat seluruh tiket company
-                // walaupun ia juga terdaftar sebagai Customer PIC di sebuah Delivery
-                // Support — sebelumnya cabang DS PIC dicek lebih dulu sehingga daftar
-                // Admin menyusut jadi "tiket DS-nya + tiket yang ia submit", dan tiket
-                // company lain (mis. yang disubmit rekannya atau hasil import dengan
-                // submitted_by_email NULL) menghilang tanpa jejak.
-                if ($canViewAll) {
-                    // Tidak ada tambahan filter — lihat semua ticket company.
-                } elseif ($isDsPic) {
-                    // DS PIC mode: tampilkan ticket DS yang ia PIC-kan + ticket yang ia submit sendiri
-                    $ticketQuery->where(function ($q) use ($dsPicTicketIds, $sessionUser) {
-                        $q->whereIn('ticket_id', $dsPicTicketIds)
-                          ->orWhere('submitted_by_email', $sessionUser['email']);
-                    });
-                    Log::info('Customer DS PIC filter applied', [
-                        'contact_id'   => $contactId,
-                        'ds_ticket_ids'=> $dsPicTicketIds->toArray(),
-                    ]);
-                } else {
-                    // Fallback logika lama: hanya tiket yang ia submit
-                    $ticketQuery->where('submitted_by_email', $sessionUser['email']);
-                }
+                // Admin → semua tiket company; DS PIC → tiket DS-nya + miliknya;
+                // Member → miliknya saja. Aturan lengkap di applyCustomerScope().
+                $this->applyCustomerScope($ticketQuery, $sessionUser);
+
+                Log::info('Customer ticket scope applied', [
+                    'contact_id'    => $contactId,
+                    'can_view_all'  => $canViewAll,
+                    'ds_ticket_ids' => $dsPicTicketIds->toArray(),
+                ]);
 
                 $tickets = $ticketQuery->orderByRaw('COALESCE(last_message_at, created_at) DESC')->get();
 
