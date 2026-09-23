@@ -15,19 +15,18 @@
 
 @section('content')
 
-{{-- Stats Cards --}}
-<div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-9 gap-4 mb-6">
+{{-- Stats Cards — same set/order/colors as the Tickets page filter cards --}}
+<div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4 mb-6">
     @php
         $statCards = [
-            ['label' => 'Total',            'value' => $stats['total'],                   'color' => 'gray-900'],
-            ['label' => 'Open',             'value' => $stats['open'],                    'color' => 'sky-600'],
-            ['label' => 'In Process',       'value' => $stats['in_process'],              'color' => 'blue-600'],
-            ['label' => 'Wait Customer',    'value' => $stats['waiting_on_customer'],     'color' => 'amber-600'],
-            ['label' => 'Wait 3rd Party',   'value' => $stats['waiting_on_3rd_party'],   'color' => 'indigo-600'],
-            ['label' => 'Wait Confirm',     'value' => $stats['waiting_to_confirmation'], 'color' => 'teal-600'],
-            ['label' => 'Hold',             'value' => $stats['hold'],                    'color' => 'orange-600'],
-            ['label' => 'Closed',           'value' => $stats['closed'],                  'color' => 'green-600'],
-            ['label' => 'Pending Approval', 'value' => $stats['pending_approval'],        'color' => 'orange-500'],
+            ['label' => 'Total',          'value' => $stats['total'],                   'color' => 'gray-900'],
+            ['label' => 'Open',           'value' => $stats['open'],                    'color' => 'sky-600'],
+            ['label' => 'In Process',     'value' => $stats['in_process'],              'color' => 'blue-600'],
+            ['label' => 'Wait Customer',  'value' => $stats['waiting_on_customer'],     'color' => 'amber-600'],
+            ['label' => 'Wait 3rd Party', 'value' => $stats['waiting_on_3rd_party'],    'color' => 'indigo-600'],
+            ['label' => 'Wait Confirm',   'value' => $stats['waiting_to_confirmation'], 'color' => 'purple-600'],
+            ['label' => 'Hold',           'value' => $stats['hold'],                    'color' => 'orange-600'],
+            ['label' => 'Closed',         'value' => $stats['closed'],                  'color' => 'green-600'],
         ];
     @endphp
 
