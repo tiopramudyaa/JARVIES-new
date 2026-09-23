@@ -112,12 +112,18 @@ class TicketController extends Controller
      * di controller ini sehingga daftar tiket & halaman detail saling bertentangan.
      *
      *   Admin (can_view_all_tickets = 1) → seluruh tiket company, tanpa filter tambahan.
-     *       MENANG atas DS PIC: admin yang kebetulan juga terdaftar sebagai Customer
-     *       PIC tetap all-access. EcoSystem sendiri melarang contact admin dijadikan
-     *       PIC, jadi ini menjaga kasus legacy/promosi yang terlanjur ada.
+     *       MENANG atas DS PIC & Contact Group: admin yang kebetulan juga terdaftar
+     *       sebagai Customer PIC tetap all-access. EcoSystem sendiri melarang contact
+     *       admin dijadikan PIC atau anggota grup, jadi ini menjaga kasus
+     *       legacy/promosi yang terlanjur ada.
      *   DS PIC (Member yang terdaftar di delivery_support_customer_pics)
-     *       → tiket DS yang ia PIC-kan + tiket yang ia submit sendiri.
-     *   Member → hanya tiket yang ia submit sendiri.
+     *       → tiket DS yang ia PIC-kan, digabung (union) dengan tiket milik
+     *         dirinya + sesama anggota Contact Group (bila ada).
+     *   Member (+ Contact Group) → tiket yang ia submit sendiri, plus tiket yang
+     *       disubmit oleh sesama anggota Contact Group-nya bila contact ini
+     *       terdaftar dalam satu grup. Grup TIDAK memperluas akses staging
+     *       tickets — mengikuti pola yang sama dengan DS PIC (lihat
+     *       pendingPage()/getStagingTickets()).
      */
     private function applyCustomerScope($query, array $sessionUser)
     {
@@ -128,16 +134,47 @@ class TicketController extends Controller
         $email     = $sessionUser['email'] ?? '';
         $contactId = isset($sessionUser['contact_id']) ? (int) $sessionUser['contact_id'] : null;
 
+        $emails = $this->getGroupMemberEmails($contactId)->push($email)->unique()->values()->all();
+
         if ($this->isDsPic($contactId)) {
             $dsPicTicketIds = $this->getDsPicTicketIds($contactId);
 
-            return $query->where(function ($q) use ($dsPicTicketIds, $email) {
+            return $query->where(function ($q) use ($dsPicTicketIds, $emails) {
                 $q->whereIn('ticket_id', $dsPicTicketIds)
-                  ->orWhere('submitted_by_email', $email);
+                  ->orWhereIn('submitted_by_email', $emails);
             });
         }
 
-        return $query->where('submitted_by_email', $email);
+        return $query->whereIn('submitted_by_email', $emails);
+    }
+
+    /**
+     * Email seluruh anggota Contact Group tempat contact ini terdaftar (termasuk
+     * dirinya sendiri), dipakai untuk memperluas visibility tiket antar-Member
+     * dalam satu grup. Kembalikan collection kosong jika contact tidak
+     * terdaftar dalam grup manapun. Hanya anggota yang punya akun login Jarvies
+     * (auth_users) yang match — anggota tanpa login tidak pernah submit tiket
+     * lewat email yang bisa dikenali di sini.
+     */
+    private function getGroupMemberEmails(?int $contactId): \Illuminate\Support\Collection
+    {
+        if (!$contactId) {
+            return collect();
+        }
+
+        $groupId = DB::table('customer_contact_group_members')
+            ->where('contact_id', $contactId)
+            ->value('group_id');
+
+        if (!$groupId) {
+            return collect();
+        }
+
+        return DB::table('customer_contact_group_members as gm')
+            ->join('auth_users as au', 'au.contact_id', '=', 'gm.contact_id')
+            ->where('gm.group_id', $groupId)
+            ->whereNotNull('au.email')
+            ->pluck('au.email');
     }
 
     /**
@@ -230,21 +267,36 @@ class TicketController extends Controller
             return false;
         }
 
-        // Admin: seluruh tiket company. Menang atas DS PIC, sama seperti di scope query.
+        // Admin: seluruh tiket company. Menang atas DS PIC & Contact Group, sama
+        // seperti di scope query.
         if ($this->customerCanViewAll($sessionUser)) {
             return true;
         }
 
         $contactId = isset($sessionUser['contact_id']) ? (int) $sessionUser['contact_id'] : null;
 
-        // DS PIC: tiket yang terhubung ke DS-nya — di luar itu jatuh ke aturan Member.
+        // DS PIC: tiket yang terhubung ke DS-nya — di luar itu jatuh ke aturan
+        // Member (+ Contact Group) di bawah.
         if ($this->isDsPic($contactId)
             && $this->getDsPicTicketIds($contactId)->contains($ticket->ticket_id)) {
             return true;
         }
 
-        // Member: hanya tiket yang ia submit sendiri.
-        return strcasecmp((string) $ticket->submitted_by_email, (string) ($sessionUser['email'] ?? '')) === 0;
+        // Member (+ Contact Group): tiket miliknya sendiri, atau milik sesama
+        // anggota grup bila contact ini terdaftar dalam satu grup.
+        $submittedBy = (string) $ticket->submitted_by_email;
+        $ownEmail    = (string) ($sessionUser['email'] ?? '');
+        if (strcasecmp($submittedBy, $ownEmail) === 0) {
+            return true;
+        }
+
+        foreach ($this->getGroupMemberEmails($contactId) as $groupEmail) {
+            if (strcasecmp($submittedBy, (string) $groupEmail) === 0) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

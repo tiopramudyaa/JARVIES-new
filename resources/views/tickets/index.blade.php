@@ -149,7 +149,7 @@
                                 <label class="block text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1">Search ticket no.</label>
                                 <input type="text" id="ticketFilterInput" placeholder="e.g. TKT-001…"
                                        class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-red-400"
-                                       oninput="colFilters.ticketNumber=this.value; applyColFilters();" onclick="event.stopPropagation()">
+                                       oninput="colFilters.ticketNumber=this.value; debouncedApplyColFilters();" onclick="event.stopPropagation()">
                                 <div class="border-t border-gray-100 mt-3 pt-2">
                                     <span class="block text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Sort</span>
                                     <div class="flex gap-2">
@@ -178,7 +178,7 @@
                                 <label class="block text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1">Search description</label>
                                 <input type="text" id="descFilterInput" placeholder="Type keyword…"
                                        class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-red-400"
-                                       oninput="colFilters.description=this.value; applyColFilters();" onclick="event.stopPropagation()">
+                                       oninput="colFilters.description=this.value; debouncedApplyColFilters();" onclick="event.stopPropagation()">
                                 <p class="text-[10px] text-gray-400 mt-1.5">Matches any ticket whose description contains this text.</p>
                                 <div class="flex justify-end gap-2 mt-3">
                                     <button type="button" onclick="clearColFilter('description','descFilterInput')" class="px-3 py-1.5 text-xs text-gray-600 border border-gray-200 rounded-md hover:bg-gray-50">Clear</button>
@@ -239,7 +239,7 @@
                                 <label class="block text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1">Search created by</label>
                                 <input type="text" id="createdByFilterInput" placeholder="Name or email…"
                                        class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-red-400"
-                                       oninput="colFilters.createdBy=this.value; applyColFilters();" onclick="event.stopPropagation()">
+                                       oninput="colFilters.createdBy=this.value; debouncedApplyColFilters();" onclick="event.stopPropagation()">
                                 <p class="text-[10px] text-gray-400 mt-1.5">Matches name or email of the ticket submitter.</p>
                                 <div class="flex justify-end gap-2 mt-3">
                                     <button type="button" onclick="clearColFilter('createdBy','createdByFilterInput')" class="px-3 py-1.5 text-xs text-gray-600 border border-gray-200 rounded-md hover:bg-gray-50">Clear</button>
@@ -454,10 +454,20 @@ function renderTickets() {
     totalItems = filteredTickets.length;
     totalPages = Math.ceil(totalItems / itemsPerPage);
 
-    if (totalItems === 0) { showEmpty(); updatePagination(); return; }
-
     document.getElementById('emptyState').classList.add('hidden');
     document.getElementById('ticketsContainer').classList.remove('hidden');
+
+    // Keep the table (and its header search inputs) mounted even with zero
+    // matches — hiding #ticketsContainer here would hide an ancestor of
+    // whichever filter input the user is still typing in, forcing it to
+    // lose focus mid-keystroke. The dedicated #emptyState screen stays
+    // reserved for genuine load failures (see loadTickets()).
+    if (totalItems === 0) {
+        document.getElementById('ticketsListBody').innerHTML =
+            `<tr><td colspan="10" class="px-3 py-12 text-center text-sm text-gray-400">No tickets match your filters.</td></tr>`;
+        updatePagination();
+        return;
+    }
 
     const start = (currentPage - 1) * itemsPerPage;
     const end   = Math.min(start + itemsPerPage, totalItems);
@@ -521,6 +531,12 @@ function createTicketRow(ticket) {
 
     const badge = (label, cls) => `<span class="inline-block px-2 py-0.5 rounded text-[11px] font-semibold ${cls}">${label}</span>`;
 
+    // Tiket ini bisa saja bukan milik viewer sendiri (DS PIC atau Contact Group
+    // memperluas visibility ke tiket rekan) — tandai biar tidak membingungkan.
+    const notSubmittedByMe = !isStaging
+        && ticket.submitted_by_email
+        && ticket.submitted_by_email.toLowerCase() !== USER_EMAIL.toLowerCase();
+
     return `<tr class="${unreadCls}" onclick="window.location='${href}'">
         <td class="px-3 py-2.5 whitespace-nowrap sticky left-0 bg-white" title="${lastUpdateTitle}">
             ${dot}<span class="text-xs ${timeColor}">${lastUpdateStr}</span>
@@ -538,7 +554,10 @@ function createTicketRow(ticket) {
         <td class="px-3 py-2.5 whitespace-nowrap">${ticket.ticket_priority ? badge(ticket.ticket_priority, priorityCls) : '<span class="text-gray-300 text-xs">—</span>'}</td>
         <td class="px-3 py-2.5 whitespace-nowrap">${ticket.ticket_type ? badge(ticket.ticket_type, typeCls) : '<span class="text-gray-300 text-xs">—</span>'}</td>
         <td class="px-3 py-2.5 text-sm text-gray-600 whitespace-nowrap">${ticket.approved_mandays != null ? ticket.approved_mandays.toFixed(2): '<span class="text-gray-300">—</span>'}</td>
-        <td class="px-3 py-2.5 text-sm text-gray-600 whitespace-nowrap">${escapeHtml(ticket.submitted_by_name || ticket.submitted_by_email || '—')}</td>
+        <td class="px-3 py-2.5 text-sm text-gray-600 whitespace-nowrap">
+            ${escapeHtml(ticket.submitted_by_name || ticket.submitted_by_email || '—')}
+            ${notSubmittedByMe ? '<span class="ml-1 inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-violet-50 text-violet-600" title="Shared with you — not submitted by your own account">Team</span>' : ''}
+        </td>
     </tr>`;
 }
 
@@ -738,6 +757,12 @@ document.addEventListener('click', function() { closeAllPanels(); });
 document.querySelector('.overflow-auto')?.addEventListener('scroll', function() { closeAllPanels(); }, { passive: true });
 
 // ==================== COL FILTER LOGIC ====================
+let _colFilterTimer = null;
+function debouncedApplyColFilters() {
+    clearTimeout(_colFilterTimer);
+    _colFilterTimer = setTimeout(applyColFilters, 250);
+}
+
 function applyColFilters() {
     let base = getScopedTickets();
 
