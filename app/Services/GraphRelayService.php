@@ -522,30 +522,47 @@ class GraphRelayService
             'files'           => count($uploadedFiles),
         ]);
 
-        // ─── Step 6: Cari Sent Items message (retry 3x, sleep 1s) ───────────
-        // Draft ID tidak valid setelah send. Graph butuh beberapa detik untuk index.
-        // Cari via PHP matching (OData filter pada internetMessageId tidak reliable).
+        // ─── Step 6: Cari Sent Items message (retry 5x, jeda 2s) ────────────
+        // Draft ID tidak valid setelah send. Graph butuh beberapa detik untuk index,
+        // dan pada mailbox yang ramai pesan bisa terdorong keluar dari 20 teratas.
+        // Cari via PHP matching di 50 pesan terbaru; $filter internetMessageId
+        // dicoba sebagai cadangan (tidak selalu andal di SentItems).
         $sentMsgId = null;
-        for ($attempt = 1; $attempt <= 3; $attempt++) {
+        $maxAttempts = 5;
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
             if ($attempt > 1) {
-                sleep(1);
+                sleep(2);
             }
             $sentSearch = Http::withToken($token)->get(
                 "{$this->graphBase}/users/{$this->sender}/mailFolders/SentItems/messages",
-                ['$orderby' => 'sentDateTime desc', '$select' => 'id,internetMessageId', '$top' => 20]
+                ['$orderby' => 'sentDateTime desc', '$select' => 'id,internetMessageId', '$top' => 50]
             );
             foreach ($sentSearch->json('value') ?? [] as $msg) {
-                if ($msg['internetMessageId'] === $internetMsgId) {
+                if (($msg['internetMessageId'] ?? null) === $internetMsgId) {
                     $sentMsgId = $msg['id'];
                     break 2;
                 }
             }
+
+            $filtered = Http::withToken($token)->get(
+                "{$this->graphBase}/users/{$this->sender}/mailFolders/SentItems/messages",
+                [
+                    '$filter' => "internetMessageId eq '" . str_replace("'", "''", $internetMsgId) . "'",
+                    '$select' => 'id',
+                    '$top'    => 1,
+                ]
+            );
+            if ($filtered->successful() && ($filteredId = $filtered->json('value.0.id'))) {
+                $sentMsgId = $filteredId;
+                break;
+            }
         }
 
         // Jika Sent Items tidak ditemukan (edge case), return partial.
-        // AttachmentController sudah punya auto-recovery fallback.
+        // EcoSystem AttachmentController memulihkan ID-nya saat file pertama kali
+        // diunduh (lewat ticket_message.email_message_id).
         if (!$sentMsgId) {
-            Log::warning('GraphRelayService: Sent Items not found after 3 attempts', [
+            Log::warning("GraphRelayService: Sent Items not found after {$maxAttempts} attempts", [
                 'ticket_id'       => $ticket->ticket_id,
                 'internet_msg_id' => $internetMsgId,
             ]);

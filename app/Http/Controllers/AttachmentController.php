@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Ticket;
 use App\Models\TicketAttachment;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -66,14 +67,21 @@ class AttachmentController extends Controller
             return redirect($attachment->link_url);
         }
 
+        // Baris tanpa Graph ID (mis. lookup Sent Items gagal saat balasan dikirim):
+        // coba pulihkan lewat email_message_id sebelum menyerah.
+        if ($this->recoverGraphIds($attachment)) {
+            return $this->fetchFromGraph($attachment);
+        }
+
         abort(404, 'Attachment not found');
     }
 
     /**
-     * Fetch file dari Microsoft Graph menggunakan app credentials (client_credentials),
-     * lalu stream ke browser.
+     * Kredensial + app token Graph (client_credentials). Abort jika tidak tersedia.
+     *
+     * @return array{0:string,1:string,2:string} [accessToken, baseUrl, sender]
      */
-    private function fetchFromGraph(TicketAttachment $attachment)
+    private function graphContext(): array
     {
         $tenantId     = config('services.microsoft_graph.tenant_id');
         $clientId     = config('services.microsoft_graph.client_id');
@@ -103,11 +111,127 @@ class AttachmentController extends Controller
             abort(502, 'Failed to authenticate with Microsoft');
         }
 
-        $accessToken = $tokenRes->json('access_token');
-        $baseUrl     = rtrim(config('services.microsoft_graph.base_url', 'https://graph.microsoft.com/v1.0'), '/');
+        return [
+            $tokenRes->json('access_token'),
+            rtrim(config('services.microsoft_graph.base_url', 'https://graph.microsoft.com/v1.0'), '/'),
+            $sender,
+        ];
+    }
+
+    /**
+     * Cari ulang ID pesan + ID attachment yang valid di mailbox Graph dan simpan ke DB.
+     *
+     * Kuncinya internetMessageId di ticket_message.email_message_id; attachment
+     * dicocokkan berdasarkan nama file. Dipakai saat ID kosong atau sudah tidak
+     * valid (draft ID berubah setelah email terkirim).
+     *
+     * @return bool true jika ID berhasil ditemukan dan disimpan
+     */
+    private function recoverGraphIds(TicketAttachment $attachment): bool
+    {
+        if (!$attachment->message_id) {
+            return false;
+        }
+
+        $internetMsgId = DB::table('ticket_message')
+            ->where('id', $attachment->message_id)
+            ->value('email_message_id');
+
+        if (!$internetMsgId) {
+            return false;
+        }
+
+        try {
+            [$accessToken, $baseUrl, $sender] = $this->graphContext();
+
+            // 1) Filter langsung di seluruh mailbox (mencakup email yang dipindah folder).
+            $filtered = Http::withToken($accessToken)->get("{$baseUrl}/users/{$sender}/messages", [
+                '$filter' => "internetMessageId eq '" . str_replace("'", "''", $internetMsgId) . "'",
+                '$select' => 'id',
+                '$top'    => 1,
+            ]);
+            $msgId = $filtered->successful() ? ($filtered->json('value.0.id') ?? null) : null;
+
+            // 2) Fallback: pindai Sent Items terbaru dan cocokkan di PHP.
+            if (!$msgId) {
+                $scan = Http::withToken($accessToken)->get("{$baseUrl}/users/{$sender}/mailFolders/SentItems/messages", [
+                    '$orderby' => 'sentDateTime desc',
+                    '$select'  => 'id,internetMessageId',
+                    '$top'     => 50,
+                ]);
+                foreach ($scan->json('value') ?? [] as $msg) {
+                    if (($msg['internetMessageId'] ?? '') === $internetMsgId) {
+                        $msgId = $msg['id'];
+                        break;
+                    }
+                }
+            }
+
+            if (!$msgId) {
+                Log::warning('AttachmentController: recoverGraphIds: pesan tidak ditemukan', [
+                    'id'               => $attachment->id,
+                    'email_message_id' => $internetMsgId,
+                ]);
+                return false;
+            }
+
+            $attList = Http::withToken($accessToken)->get(
+                "{$baseUrl}/users/{$sender}/messages/{$msgId}/attachments",
+                ['$select' => 'id,name']
+            );
+            $attId = null;
+            foreach ($attList->json('value') ?? [] as $sa) {
+                if (strtolower($sa['name'] ?? '') === strtolower($attachment->file_name ?? '')) {
+                    $attId = $sa['id'];
+                    break;
+                }
+            }
+
+            if (!$attId) {
+                Log::warning('AttachmentController: recoverGraphIds: attachment tidak cocok by nama', [
+                    'id'        => $attachment->id,
+                    'file_name' => $attachment->file_name,
+                ]);
+                return false;
+            }
+
+            $attachment->update([
+                'graph_message_id'    => $msgId,
+                'graph_attachment_id' => $attId,
+            ]);
+
+            Log::info('AttachmentController: Graph ID dipulihkan', ['id' => $attachment->id]);
+
+            return true;
+        } catch (\Throwable $e) {
+            // abort() dari graphContext() adalah HttpException; biarkan lewat.
+            if ($e instanceof \Symfony\Component\HttpKernel\Exception\HttpException) {
+                throw $e;
+            }
+            Log::warning('AttachmentController: recoverGraphIds gagal', [
+                'id'    => $attachment->id,
+                'error' => $e->getMessage(),
+            ]);
+            return false;
+        }
+    }
+
+    /**
+     * Fetch file dari Microsoft Graph menggunakan app credentials (client_credentials),
+     * lalu stream ke browser.
+     */
+    private function fetchFromGraph(TicketAttachment $attachment)
+    {
+        [$accessToken, $baseUrl, $sender] = $this->graphContext();
 
         $res = Http::withToken($accessToken)
             ->get("{$baseUrl}/users/{$sender}/messages/{$attachment->graph_message_id}/attachments/{$attachment->graph_attachment_id}");
+
+        // 404: ID kemungkinan draft ID lama yang tidak valid setelah email terkirim.
+        if ($res->status() === 404 && $this->recoverGraphIds($attachment)) {
+            $res = Http::withToken($accessToken)
+                ->get("{$baseUrl}/users/{$sender}/messages/{$attachment->graph_message_id}/attachments/{$attachment->graph_attachment_id}");
+        }
 
         if (!$res->successful()) {
             Log::error('AttachmentController: attachment fetch failed', [
