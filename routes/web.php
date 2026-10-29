@@ -102,6 +102,9 @@ Route::middleware('jarvies.auth')->group(function () {
     Route::post('/settings/preferences', [SettingsController::class, 'updatePreferences'])->name('settings.preferences');
     Route::post('/settings/reset', [SettingsController::class, 'resetPreferences'])->name('settings.reset');
 
+    // ==================== USER GUIDE ====================
+    Route::get('/user-guide', [\App\Http\Controllers\UserGuideController::class, 'index'])->name('user-guide');
+
     // ==================== PROFILE ====================
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile');
     Route::post('/profile/send-reset-link', [ProfileController::class, 'sendResetLink'])->name('profile.send-reset-link');
